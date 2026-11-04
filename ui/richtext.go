@@ -118,8 +118,9 @@ func NewTextShadow(x, y, blur float32, c Color) TextShadow {
 // shadow returns the span's Shadow, and whether it sets one.
 func (s *Span) shadow() (TextShadow, bool) { return s.Shadow, s.shadowSet || s.Shadow.color.A > 0 }
 
-// color returns the span's Color, and whether it sets one.
-func (s *Span) color() (Color, bool) { return s.Color, s.colorSet || s.Color.A > 0 }
+// color returns the span's Color, and whether it sets one: any but the
+// zero Color, a color faded to nothing too, which draws nothing.
+func (s *Span) color() (Color, bool) { return s.Color, s.colorSet || s.Color != (Color{}) }
 
 // decorationColor returns the span's DecorationColor, and whether it sets
 // one.
@@ -248,7 +249,7 @@ func (sc *spanCache) update(spans []Span) {
 	paints := false
 	for i, s := range spans {
 		end += utf8.RuneCountInString(s.Text)
-		paints = paints || s.Color.A > 0 || s.colorSet || s.Underline || s.WavyUnderline || s.DottedUnderline || s.Strikethrough || s.Background.A > 0 || s.strokeSet || s.shadowSet || s.Shadow.color.A > 0
+		paints = paints || s.Color != (Color{}) || s.colorSet || s.Underline || s.WavyUnderline || s.DottedUnderline || s.Strikethrough || s.Background.A > 0 || s.strokeSet || s.shadowSet || s.Shadow.color.A > 0
 		same = same && sc.styles[i] == spanStyle(s, end)
 	}
 	sc.paints = paints
@@ -421,7 +422,9 @@ func (sp *spanPaint) at(r int) int {
 	return lo
 }
 
-// color returns the color of span i, or c.
+// color returns the color of span i, or c for one leaving it zero: a
+// color faded to nothing is the span's own, drawing nothing, not the
+// text's around it.
 func (sp *spanPaint) color(i int, c Color) Color {
 	if i >= 0 {
 		if sc, ok := sp.spans[i].color(); ok {
