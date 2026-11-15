@@ -5840,6 +5840,12 @@ either.
 - **Tests.** `ui.Tester` runs views against a host in memory
   (`ui/headless.go`) with the CPU renderer, at its own time
   (`engine.clock`), which stands still until `Tester.Advance` moves it.
+  Its window shapes and paints text in a text system of its own
+  (`text.New`), so that Testers run in parallel (#1722); the system's
+  engine closes once the Tester is unreachable (`engineCloser`, run by a
+  cleanup), releasing what it holds of the system's text stack: on
+  Linux a Pango font map and the thread fontconfig starts for it, which
+  a test binary of hundreds of Testers otherwise kept (#1902).
   Its host runs no timer; it notes their deadlines, and `Advance` runs
   the frames due. `Tester.Access` and `AccessByRole`
   (`ui/tester_access.go`) build the last frame's accessibility tree on
