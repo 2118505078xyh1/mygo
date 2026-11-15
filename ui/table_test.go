@@ -387,7 +387,9 @@ func TestEditableTextInTable(t *testing.T) {
 		t.Errorf("Escape left %q", names[1])
 	}
 	// A click on the name of the row chosen edits it, once a double click
-	// is out of the question; the focus leaving keeps what was typed.
+	// is out of the question; the focus leaving keeps what was typed. A
+	// click of its own: long after the last, not the next of a run.
+	tt.Advance(time.Second)
 	tt.Click("beach.jpeg")
 	if tt.HasText("beach.jpeg") != true {
 		t.Fatal("the click edited at once")
@@ -765,7 +767,8 @@ func TestEditableTextListEdit(t *testing.T) {
 	if len(edits) != 1 || edits[0] != 1 || names[1] != "photo.jpeg" || inputs != 0 {
 		t.Fatalf("the key: edits %v, name %q, inputs %d", edits, names[1], inputs)
 	}
-	// A slow second click on the chosen row's text.
+	// A slow second click on the chosen row's text, long after the last.
+	tt.Advance(time.Second)
 	tt.Click("photo.jpeg")
 	tt.Advance(platform.DefaultDoubleClick.Time + 50*time.Millisecond)
 	countInputs()
@@ -832,5 +835,47 @@ func TestListEditSaysWhereTheClickWas(t *testing.T) {
 	}
 	if len(got) != 2 || got[1].Clicked {
 		t.Errorf("the key: %+v", got)
+	}
+}
+
+// A fast double click on a row's text opens the row and edits nothing,
+// chosen before or not: the release of its second press is no click
+// asking to edit, as in Finder and Explorer.
+func TestEditableTextFastDoubleClickEditsNothing(t *testing.T) {
+	for _, chosenFirst := range []bool{true, false} {
+		names := []string{"notes.txt", "book.xlsx"}
+		sel := -1
+		var chosen Selection[string]
+		var edits []int
+		submits := 0
+		s := ListState{Selected: &sel, Selection: &chosen, Key: func(i int) any { return names[i] },
+			Edit: func(e ListEdit) { edits = append(edits, e.Row) }}
+		tt := coreNewTester(func(c *context) {
+			coreColumn(c).Fill().Padding(10).Children(func() {
+				l := coreList(c, &s, len(names), func(row int) {
+					coreEditableText(c, &names[row])
+				}).Grow(1)
+				if l.Submitted() {
+					submits++
+				}
+			})
+		}, 400, 300)
+		if chosenFirst {
+			tt.Click("book.xlsx")
+			tt.Advance(time.Second)
+		}
+		r, _ := tt.Find("book.xlsx")
+		x, y := float32(r.X+10), float32(r.Y+r.H/2)
+		tt.Press(x, y)
+		tt.Advance(60 * time.Millisecond)
+		tt.Release(x, y)
+		tt.Advance(80 * time.Millisecond)
+		tt.Press(x, y)
+		tt.Advance(60 * time.Millisecond)
+		tt.Release(x, y)
+		tt.Advance(2 * time.Second)
+		if submits != 1 || len(edits) != 0 {
+			t.Errorf("chosen first %v: opened %d times, edits %v", chosenFirst, submits, edits)
+		}
 	}
 }

@@ -55,7 +55,7 @@ func coreEditableText(c *context, value *string) *node {
 		switch {
 		case row.double || !row.f.chosen(row.i, row.key):
 			st.after = time.Time{}
-		case row.clicked && row.chosen && box.Hovered():
+		case row.single && row.chosen && box.Hovered():
 			st.at = c.rt.pressPoint
 			st.after = c.rt.pressAt.Add(c.rt.doubleClick)
 			if st.after.Before(c.now) {
