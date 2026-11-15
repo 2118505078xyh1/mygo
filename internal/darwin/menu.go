@@ -284,15 +284,29 @@ func badgeTabFor(align platform.BadgeAlignment, start, width float64) float64 {
 	}
 }
 
+// NSTextAlignment values. Center and right differ by architecture: arm64
+// uses UIKit's (center 1, right 2), x86_64 AppKit's original ones (right 1,
+// center 2).
+const nsTextAlignmentLeft = 0
+
+var nsTextAlignmentCenter, nsTextAlignmentRight = textAlignments(runtime.GOARCH)
+
+func textAlignments(arch string) (center, right int) {
+	if arch == "amd64" {
+		return 2, 1
+	}
+	return 1, 2
+}
+
 // tabAlignment is the NSTextTab alignment of a badge.
 func tabAlignment(align platform.BadgeAlignment) uint {
 	switch align {
 	case platform.BadgeAlignLeft:
-		return 0 // NSTextAlignmentLeft
+		return nsTextAlignmentLeft
 	case platform.BadgeAlignCenter:
-		return 2 // NSTextAlignmentCenter
+		return uint(nsTextAlignmentCenter)
 	default:
-		return 1 // NSTextAlignmentRight
+		return uint(nsTextAlignmentRight)
 	}
 }
 
@@ -370,9 +384,9 @@ func titleAlignment(title id) platform.BadgeAlignment {
 		return platform.BadgeAlignRight
 	}
 	switch sendInt(tabs[0], "alignment") {
-	case 0:
+	case nsTextAlignmentLeft:
 		return platform.BadgeAlignLeft
-	case 2:
+	case nsTextAlignmentCenter:
 		return platform.BadgeAlignCenter
 	default:
 		return platform.BadgeAlignRight

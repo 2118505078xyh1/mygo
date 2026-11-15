@@ -54,9 +54,9 @@ func TestMenuBadgeTitle(t *testing.T) {
 			tab   float64
 			want  int
 		}{
-			{platform.BadgeAlignLeft, start, 0},
-			{platform.BadgeAlignCenter, start + width/2, 2},
-			{platform.BadgeAlignRight, start + width, 1},
+			{platform.BadgeAlignLeft, start, nsTextAlignmentLeft},
+			{platform.BadgeAlignCenter, start + width/2, nsTextAlignmentCenter},
+			{platform.BadgeAlignRight, start + width, nsTextAlignmentRight},
 		} {
 			setItemTitle(item, "Node", "120 ms", a.tab, a.align)
 			title := send(item, "attributedTitle")
@@ -187,4 +187,18 @@ func TestMenuBadgeSubtitle(t *testing.T) {
 			t.Errorf("column start %v does not clear %q", start, want)
 		}
 	})
+}
+
+func TestTextAlignments(t *testing.T) {
+	for _, c := range []struct {
+		arch          string
+		center, right int
+	}{
+		{"arm64", 1, 2},
+		{"amd64", 2, 1},
+	} {
+		if center, right := textAlignments(c.arch); center != c.center || right != c.right {
+			t.Errorf("%s: center %d, right %d, want %d, %d", c.arch, center, right, c.center, c.right)
+		}
+	}
 }
