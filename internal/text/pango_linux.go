@@ -405,19 +405,14 @@ type pangoEngine struct {
 	fonts  map[uintptr]*Font
 	scaled map[scaledKey]uintptr
 
-	registered map[string]bool // files of registered fonts
 	// names are the names the app's fonts are listed under: the one the
 	// app gave, or their own; appFamily the own family of each, by
 	// lowercased name.
 	names     []string
 	appFamily map[string]string
-	// files are the own families of each file of the app's fonts; given
-	// the families the app gave each file, their own when it gave none;
-	// ownOf the own families of each face that a family the app gives
-	// other files is taken from (takeFamilies).
-	files map[string][]string
+	// given are the families the app gave each file of its fonts, their
+	// own when it gave none.
 	given map[string][]string
-	ownOf map[uintptr][]string
 	// uiFamily is the desktop's interface font, which system-ui stands for
 	// before fontconfig's default.
 	uiFamily string
@@ -497,11 +492,8 @@ func newPango() (*pangoEngine, error) {
 		descs:       map[Style]uintptr{},
 		fonts:       map[uintptr]*Font{},
 		scaled:      map[scaledKey]uintptr{},
-		registered:  map[string]bool{},
 		appFamily:   map[string]string{},
-		files:       map[string][]string{},
 		given:       map[string][]string{},
-		ownOf:       map[uintptr][]string{},
 		languages:   map[string]uintptr{},
 		hanFamilies: map[[2]string]string{},
 	}
@@ -1441,16 +1433,11 @@ func (e *pangoEngine) register(data []byte, family string) error {
 		return fmt.Errorf("mygo: cannot add font: %w", err)
 	}
 	config := l.fcConfigGetCurrent()
-	if !e.registered[path] {
-		if l.fcConfigAppFontAddFile(config, path) == 0 {
-			return errors.New("mygo: cannot add font: not a font fontconfig reads")
-		}
-		e.registered[path] = true
-	}
-	names, ok := e.files[path]
-	if !ok {
-		names = fontFamilies(config, path)
-		e.files[path] = names
+	fcAppFonts.mu.Lock()
+	defer fcAppFonts.mu.Unlock()
+	names, err := addFontFile(config, path)
+	if err != nil {
+		return err
 	}
 	if family != "" {
 		if len(names) == 0 {
@@ -1480,6 +1467,46 @@ func (e *pangoEngine) register(data []byte, family string) error {
 	clear(e.descs)
 	clear(e.hanFamilies)
 	return nil
+}
+
+// fcAppFonts is what engines share of the app's fonts in fontconfig: its
+// current configuration belongs to the process, not to an engine, so an
+// engine (as each Tester has one) finds a file another added there rather
+// than adding it again, which grew the configuration with every engine
+// (#1944). files are the own families of each file added, ownOf the own
+// families of each face that a family the app gives other files is taken
+// from (takeFamilies). mu is held while an engine reads or edits the
+// faces of the app's fonts.
+var fcAppFonts struct {
+	mu    sync.Mutex
+	files map[fcAppFile][]string
+	ownOf map[uintptr][]string
+}
+
+type fcAppFile struct {
+	config uintptr
+	path   string
+}
+
+// addFontFile adds a file of the app's fonts to a fontconfig
+// configuration, once, and returns the own families of its faces.
+// fcAppFonts.mu is held.
+func addFontFile(config uintptr, path string) ([]string, error) {
+	key := fcAppFile{config, path}
+	if names, ok := fcAppFonts.files[key]; ok {
+		return names, nil
+	}
+	if pangoLib.fcConfigAppFontAddFile(config, path) == 0 {
+		return nil, errors.New("mygo: cannot add font: not a font fontconfig reads")
+	}
+	// Read before takeFamilies edits the faces' families.
+	names := fontFamilies(config, path)
+	if fcAppFonts.files == nil {
+		fcAppFonts.files = map[fcAppFile][]string{}
+		fcAppFonts.ownOf = map[uintptr][]string{}
+	}
+	fcAppFonts.files[key] = names
+	return names, nil
 }
 
 // givenFamily marks the faces addFamily adds, with the family they are
@@ -1563,7 +1590,7 @@ func (e *pangoEngine) takeFamilies(config uintptr) bool {
 		if len(gave) == 0 {
 			continue
 		}
-		own, edited := e.ownOf[p]
+		own, edited := fcAppFonts.ownOf[p]
 		if !edited {
 			for n := int32(0); ; n++ {
 				var family *byte
@@ -1579,7 +1606,7 @@ func (e *pangoEngine) takeFamilies(config uintptr) bool {
 		if len(keep) == len(own) && !edited {
 			continue
 		}
-		e.ownOf[p] = own
+		fcAppFonts.ownOf[p] = own
 		if len(keep) == 0 {
 			// Found under a family the app gave it, as its faces are.
 			keep = gave[:1]

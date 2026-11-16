@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+
+	"golang.org/x/image/font/gofont/gomonobolditalic"
 )
 
 // Punctuation and full-width forms in a language that writes Han get the
@@ -176,6 +178,54 @@ func TestWriteCacheFileConcurrent(t *testing.T) {
 		}
 		if mode := info.Mode().Perm(); mode != 0o644 {
 			t.Fatalf("round %d: font's mode %v, want 0644", round, mode)
+		}
+	}
+}
+
+// Engines share fontconfig's current configuration: a font every engine
+// registers, as each Tester's does the app's, is added to it once, not
+// once an engine, which grew it and slowed each Tester more than the one
+// before (#1944). Each engine still lays out with the font, one that has
+// laid out text before registering it too. Go Mono is monospaced, so
+// "iiiiiiii" is as wide as "mmmmmmmm" only in it.
+func TestPangoRegisterAddsFileOnce(t *testing.T) {
+	if _, err := newPango(); err != nil {
+		t.Skip(err)
+	}
+	l := &pangoLib
+	if l.fcConfigAppFontAddFile == nil || l.fcFontSetAdd == nil || l.fontMapConfigChanged == nil {
+		t.Skip("no fontconfig or PangoFT2")
+	}
+	const family = "MyGo Test Once Mono"
+	faces := func() int32 {
+		set := l.fcConfigGetFonts(l.fcConfigGetCurrent(), fcSetApplication)
+		if set == nil {
+			return 0
+		}
+		return set.nfont
+	}
+	monospaced := func(s *System) bool {
+		width := func(text string) float32 {
+			return s.Layout(Params{Text: text, Style: Style{Size: 20, Family: family}}).Lines[0].Width
+		}
+		i, m := width("iiiiiiii"), width("mmmmmmmm")
+		return i > m-0.5 && i < m+0.5
+	}
+	if err := newSystem().RegisterFont(gomonobolditalic.TTF, family); err != nil {
+		t.Fatal(err)
+	}
+	want := faces()
+	for i := range 3 {
+		s := newSystem()
+		s.Layout(Params{Text: "Hello", Style: Style{Size: 20}})
+		if err := s.RegisterFont(gomonobolditalic.TTF, family); err != nil {
+			t.Fatal(err)
+		}
+		if got := faces(); got != want {
+			t.Errorf("engine %d: %d faces of the app's fonts in fontconfig, want %d", i+2, got, want)
+		}
+		if !monospaced(s) {
+			t.Errorf("engine %d: text does not use the registered font", i+2)
 		}
 	}
 }
