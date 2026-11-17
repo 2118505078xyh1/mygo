@@ -576,10 +576,10 @@ func setStyle(e *node, name, value string) bool {
 	case "white-space":
 		switch lower {
 		case "nowrap":
-			e.noWrap = true
+			e.setNoWrap(true)
 			return true
 		case "normal":
-			e.noWrap = false
+			e.setNoWrap(false)
 			if e.single {
 				e.single, e.maxLines = false, 0
 			}
@@ -703,7 +703,7 @@ func unsetStyle(e *node, name string) {
 	case "z-index":
 		e.zIndex = 0
 	case "white-space":
-		e.noWrap = false
+		e.setNoWrap(false)
 		if e.single {
 			e.single, e.maxLines = false, 0
 		}
