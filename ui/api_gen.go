@@ -1750,7 +1750,9 @@ func Local[T any](e Element, key any, init func() T) *T {
 // Right opens a submenu and Left closes it, the other way round right to
 // left (Direction); Enter and Space choose an item, Escape closes the
 // submenu on top, and Tab and a press outside the menu close it. The
-// pointer highlights the item it moves onto, opening its submenu.
+// pointer highlights the item it moves onto, opening its submenu, but for
+// those it crosses heading for a submenu that shows, which stays open
+// until the pointer rests on one of them (menuAimGrace).
 // Assistive technology sees a menu button, expanded while its menu shows,
 // and a menu of items, check box items and radio items. PopoverMenuButton
 // draws its menu with these parts, in the theme's look.
@@ -5285,7 +5287,10 @@ func (_handle Element) Fit(f Fit) Element {
 }
 
 // FixedLineHeight sets the height of lines of text in DIPs, whatever the
-// font size, as for rows of text that line up with a grid.
+// font size, as for rows of text that line up with a grid. Lines keep it
+// exactly, as CSS's line-height in px: a taller font in a line, as a
+// fallback font's, doesn't grow it, and its ink may reach past the line.
+// Inline objects and spans shifted off the baseline still grow it.
 func (_handle Element) FixedLineHeight(v float32) Element {
 	_node := _handle.node()
 	if _node == nil {
@@ -6227,7 +6232,8 @@ func (_handle Element) Level(n int) Element {
 }
 
 // LineHeight sets the height of lines of text as a multiple of the font
-// size.
+// size. It is a minimum: a line with a taller font in it, as a fallback
+// font's, grows to fit it.
 func (_handle Element) LineHeight(m float32) Element {
 	_node := _handle.node()
 	if _node == nil {
