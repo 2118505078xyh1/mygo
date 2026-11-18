@@ -1288,17 +1288,23 @@ func (e *coreText) line(line uintptr, index []int, n int, italic bool) shapedLin
 
 // penAdvances gives the room Core Text leaves between letters by their
 // positions alone, as between Han and Latin letters in Chinese or
-// Japanese text, to the advance of the letter before it, so that the
-// widths of lines and the carets follow the pen. Only room ahead of the
-// pen counts: a mark placed back over its letter leaves the advances as
-// they are. Right-to-left runs keep theirs.
+// Japanese text, or between the letters of a Nastaliq word, to the
+// advance of the letter left of it, so that the widths of lines and the
+// carets follow the pen: Core Text breaks lines by the glyphs' positions,
+// and a text laid out as wide as it measured stays on one line. Only room
+// ahead of the pen counts, in the direction it moves: a mark placed back
+// over its letter leaves the advances as they are.
 func penAdvances(runs []shapedRun) {
 	var prev *Glyph
 	var pen float32
 	for i := range runs {
 		for j := range runs[i].glyphs {
 			g := &runs[i].glyphs[j]
-			if prev != nil && !prev.RTL && !g.RTL {
+			if g.RTL {
+				prev = nil // rtlPenAdvances' to follow
+				continue
+			}
+			if prev != nil {
 				if gap := g.X - pen; gap > 1e-3 {
 					prev.Advance += gap
 					pen += gap
@@ -1308,6 +1314,39 @@ func penAdvances(runs []shapedRun) {
 			}
 			pen += g.Advance
 			prev = g
+		}
+	}
+	rtlPenAdvances(runs)
+}
+
+// rtlPenAdvances does what penAdvances does for each stretch of
+// right-to-left glyphs of a line, which may span runs, as of a Nastaliq
+// word and the spaces of another font between: their pen moves to the
+// left, from the right edge of the last glyph, in visual order, so the
+// room between a glyph and the one right of it goes to the advance of the
+// left one, which then reaches the other. A glyph without an advance, a
+// mark, is placed by its offset alone: it leaves the pen where it is, and
+// takes no room, before its letter in visual order as it is (#2016).
+func rtlPenAdvances(runs []shapedRun) {
+	started := false // in a stretch of right-to-left glyphs, with pen
+	var pen float32
+	for i := len(runs) - 1; i >= 0; i-- {
+		gs := runs[i].glyphs
+		for j := len(gs) - 1; j >= 0; j-- {
+			g := &gs[j]
+			if !g.RTL {
+				started = false
+				continue
+			}
+			if g.Advance <= 0 {
+				continue
+			}
+			if !started {
+				started, pen = true, g.X+g.Advance
+			} else if gap := pen - (g.X + g.Advance); gap > 1e-3 {
+				g.Advance += gap
+			}
+			pen -= g.Advance
 		}
 	}
 }
