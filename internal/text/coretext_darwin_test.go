@@ -659,6 +659,10 @@ func TestPenAdvances(t *testing.T) {
 		{"right to left", [][]Glyph{{g(0, 8, true), g(10, 6, true), g(18, 4, true)}}, [][]float32{{10, 8, 4}}},
 		{"right to left, a mark", [][]Glyph{{g(0, 8, true), g(12, 0, true), g(10, 6, true)}}, [][]float32{{10, 0, 6}}},
 		{"right to left, a mark ahead of the pen", [][]Glyph{{g(0, 8, true), g(5, 0, true), g(10, 6, true)}}, [][]float32{{10, 0, 6}}},
+		// Core Text's: a mark right of the pen, its advance bringing the
+		// pen back; one pulling the next letter back over the last.
+		{"right to left, a mark placed by its offset", [][]Glyph{{g(4, -4, true), g(0, 8, true), g(8, 4, true)}}, [][]float32{{0, 8, 4}}},
+		{"right to left, a mark pulling the pen back", [][]Glyph{{g(0, 10, true), g(10, -2, true), g(8, 4, true)}}, [][]float32{{10, -2, 4}}},
 		{"right to left, letters overlapping", [][]Glyph{{g(0, 8, true), g(6, 6, true)}}, [][]float32{{8, 6}}},
 		{"right to left, across runs", [][]Glyph{{g(0, 8, true)}, {g(9, 3, true)}, {g(13, 6, true)}}, [][]float32{{9}, {4}, {6}}},
 		{"mixed: no room between directions", [][]Glyph{{g(0, 10, false)}, {g(12, 6, true), g(20, 6, true)}, {g(30, 5, false)}}, [][]float32{{10}, {8, 6}, {5}}},

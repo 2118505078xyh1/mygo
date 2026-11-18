@@ -1295,6 +1295,7 @@ func (e *coreText) line(line uintptr, index []int, n int, italic bool) shapedLin
 // ahead of the pen counts, in the direction it moves: a mark placed back
 // over its letter leaves the advances as they are.
 func penAdvances(runs []shapedRun) {
+	offsetMarks(runs)
 	var prev *Glyph
 	var pen float32
 	for i := range runs {
@@ -1317,6 +1318,28 @@ func penAdvances(runs []shapedRun) {
 		}
 	}
 	rtlPenAdvances(runs)
+}
+
+// offsetMarks takes the advance away from the right-to-left glyphs that
+// Core Text places by their offset alone, as the mark Noto Nastaliq Urdu
+// puts before its letter in visual order, right of the pen: its advance,
+// negative, brings the pen back to where it was, so it moves the pen by
+// nothing, but the advances added up would end the line short by the
+// offset, and a text laid out as wide as it measured would break (#2016).
+// A negative advance that does move the pen, as of a mark pulling the
+// next letter back over the last, stays.
+func offsetMarks(runs []shapedRun) {
+	var end float32 // where the glyph before left the pen, from the line's origin
+	for i := range runs {
+		for j := range runs[i].glyphs {
+			g := &runs[i].glyphs[j]
+			e := g.X + g.Advance
+			if g.RTL && g.Advance < 0 && abs(e-end) <= 1e-3 {
+				g.Advance = 0
+			}
+			end = e
+		}
+	}
 }
 
 // rtlPenAdvances does what penAdvances does for each stretch of
