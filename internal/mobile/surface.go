@@ -143,6 +143,15 @@ func (s *surface) FrameNow() { s.draw(false) }
 
 var _ platform.PacedSurface = (*surface)(nil)
 
+// FrameAhead: on Android, a frame asked for goes through the pipe to the
+// UI thread before Choreographer asks for the next refresh, so the content
+// asks for its next frame as it starts one while it animates
+// (platform.FrameAheadSurface). pending, and the host's own, coalesce the
+// request the frame's end makes. iOS's display link asks at once.
+func (s *surface) FrameAhead() bool { return runtime.GOOS == "android" }
+
+var _ platform.FrameAheadSurface = (*surface)(nil)
+
 // draw sends the content a frame, paced or not, unless there is nothing
 // to draw on.
 func (s *surface) draw(paced bool) {

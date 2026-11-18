@@ -163,8 +163,10 @@ type windowHost struct {
 	afterT, repaintT *time.Timer
 	detached         bool
 	// shown tells that a frame was presented, which makes the window
-	// ready to show.
-	shown bool
+	// ready to show; renewed that the surface's native objects were made
+	// anew since (SurfaceRenew), which the next frame presented tells it
+	// of (platform.FirstFrameSurface).
+	shown, renewed bool
 	// placed is where the surface shows the window's web views, views
 	// the web views.
 	placed []platform.WebViewPlacement
@@ -330,6 +332,7 @@ func (h *windowHost) event(ev platform.SurfaceEvent) bool {
 			h.gpu = nil
 		}
 		h.gpuTried, h.retryAt = false, time.Time{}
+		h.renewed = true
 		h.requestFrame()
 		return false
 	}
@@ -533,16 +536,19 @@ func (h *windowHost) present(s *scene.Scene) {
 
 // ready tells the surface, after the first frame, that the frame reached
 // it, and the window that it is ready to show: once the frame returns, as
-// its listeners may show the window.
+// its listeners may show the window. The surface is told again of the
+// first frame on its new native objects (renewed), which Android's host
+// holds the window's first draw back for.
 func (h *windowHost) ready() {
-	if h.shown {
+	if h.shown && !h.renewed {
 		return
 	}
-	h.shown = true
+	first := !h.shown
+	h.shown, h.renewed = true, false
 	if f, ok := h.conn.Surface.(platform.FirstFrameSurface); ok {
 		f.FirstFrame()
 	}
-	if h.conn.Ready != nil && h.conn.Post != nil {
+	if first && h.conn.Ready != nil && h.conn.Post != nil {
 		h.conn.Post(h.conn.Ready)
 	}
 }
@@ -795,6 +801,13 @@ func (h *windowHost) detach() {
 func (h *windowHost) requestFrame() {
 	h.frameAsked, h.unshown = true, false
 	h.conn.Surface.RequestFrame()
+}
+
+// frameAhead reports whether the content asks for its next frame as it
+// starts one while it animates (platform.FrameAheadSurface).
+func (h *windowHost) frameAhead() bool {
+	s, ok := h.conn.Surface.(platform.FrameAheadSurface)
+	return ok && s.FrameAhead()
 }
 
 // framesAtOnce reports whether the surface's frames come as soon as asked

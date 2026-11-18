@@ -46,6 +46,9 @@ class WebWindow(context: Context, c: CreateWindowCall) : HostWindow(context, c.i
     private var defaultUA = ""
     private var suffix = c.userAgentSuffix
     private val ui = Handler(Looper.getMainLooper())
+    /** Whether the web view showed a page, which it keeps in a new Activity. */
+    var pageShown = false
+        private set
 
     init {
         val s = web.settings
@@ -199,6 +202,7 @@ class WebWindow(context: Context, c: CreateWindowCall) : HostWindow(context, c.i
         }
 
         override fun onPageCommitVisible(view: WebView, url: String) {
+            pageShown = true
             HostImpl.drew = true
         }
 
