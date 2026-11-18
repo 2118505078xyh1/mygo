@@ -60,7 +60,11 @@ func TestInputPlaceholderInATallerFont(t *testing.T) {
 	if top < 0 || wantTop < 0 {
 		t.Fatalf("no ink: the placeholder's rows %d to %d, the typed text's %d to %d", top, bottom, wantTop, wantBottom)
 	}
-	if top != wantTop || bottom != wantBottom {
+	// Within a row: the value and the placeholder are drawn by different
+	// paths, whose antialiasing (ClearType on Windows) can darken one row
+	// more or less at an edge. The clipped placeholder of the bug is many
+	// rows off.
+	if abs(top-wantTop) > 1 || abs(bottom-wantBottom) > 1 {
 		t.Errorf("the placeholder's ink is in rows %d to %d of its field, the typed text's in %d to %d", top, bottom, wantTop, wantBottom)
 	}
 }
@@ -206,4 +210,11 @@ func tallFont(t *testing.T, data []byte, family string, scale float64, glyphs ma
 	}
 	be.PutUint32(out[head+8:], 0xb1b0afba-checksum(out))
 	return out
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
