@@ -595,6 +595,14 @@ func (s *System) Reuse() {
 		s.clearLayouts()
 		clear(s.marks)
 	}
+	// What the engine keeps of the last window's shaping (Core Text's
+	// typesetters) goes, as when windows go idle, and the layouts kept count
+	// as unused by the frames to come, as none of the next window's drew
+	// them: they don't take its live budget.
+	if k, ok := s.eng.(shapingKeeper); ok {
+		k.releaseShaping()
+	}
+	s.frame += liveLayoutFrames
 	s.MaskAtlas, s.ColorAtlas = newAtlases()
 	clear(s.glyphs)
 	clear(s.runs)
