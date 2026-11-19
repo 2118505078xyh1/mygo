@@ -1901,6 +1901,54 @@ func TestMenuRolesOnWindow(t *testing.T) {
 	}
 }
 
+// TestDefaultMenuZoom checks that the zoom items of the default menu,
+// which MyGo put there, zoom only a page with ZoomControl, and that the
+// same items in the app's own menu zoom any page.
+func TestDefaultMenuZoom(t *testing.T) {
+	item := func(m *Menu, role MenuRole) *MenuItem {
+		t.Helper()
+		for _, it := range m.Items() {
+			for _, sub := range append([]*MenuItem{it}, it.Submenu...) {
+				if sub.Role == role {
+					return sub
+				}
+			}
+		}
+		t.Fatalf("no %s item", role)
+		return nil
+	}
+	defaults := NewMenu(defaultViewMenu())
+	own := NewMenu([]*MenuItem{{Role: RoleViewMenu}})
+	click := func(it *MenuItem, w *Window) { onMain(func() { menuItemClicked(it.uid, w) }) }
+
+	plain, pfw := testWindow(t, WindowOptions{})
+	click(item(defaults, RoleZoomIn), plain)
+	if z := pfw.Zoom(); z != 1 {
+		t.Errorf("the default menu's Zoom In zoomed a page without ZoomControl to %v", z)
+	}
+	click(item(own, RoleZoomIn), plain)
+	if z := pfw.Zoom(); z <= 1 {
+		t.Errorf("the app's Zoom In left a page without ZoomControl at %v", z)
+	}
+	click(item(defaults, RoleResetZoom), plain)
+	if z := pfw.Zoom(); z == 1 {
+		t.Error("the default menu's Actual Size reset a page without ZoomControl")
+	}
+
+	zoomable, zfw := testWindow(t, WindowOptions{Page: PageOptions{ZoomControl: true}})
+	click(item(defaults, RoleZoomIn), zoomable)
+	if z := zfw.Zoom(); z <= 1 {
+		t.Errorf("the default menu's Zoom In left a page with ZoomControl at %v", z)
+	}
+	click(item(defaults, RoleResetZoom), zoomable)
+	if z := zfw.Zoom(); z != 1 {
+		t.Errorf("the default menu's Actual Size left a page with ZoomControl at %v", z)
+	}
+	if it := item(defaults, RoleReload); it.userZoom {
+		t.Error("the default menu's Reload asks for ZoomControl")
+	}
+}
+
 func TestWindowMenuActivation(t *testing.T) {
 	w, fw := testWindow(t, WindowOptions{Hidden: true})
 	other, otherNative := testWindow(t, WindowOptions{Hidden: true})

@@ -778,6 +778,38 @@ func TestPageGestures(hwnd uintptr, webView int) (swipe, pinch, ok bool) {
 	return sw != 0, pz != 0, true
 }
 
+// TestZoomControl reports whether the user may zoom the page of a window,
+// or with webView 0 or more, of its web view of that index, with
+// Ctrl+wheel, as its WebView2 settings say. ok is false without that
+// page's web view.
+func TestZoomControl(hwnd uintptr, webView int) (on, ok bool) {
+	w := theBackend.windows[hwnd]
+	if w != nil && webView >= 0 {
+		if webView >= len(w.webViews) {
+			return false, false
+		}
+		w = w.webViews[webView]
+	}
+	if w == nil || w.settings == 0 {
+		return false, false
+	}
+	var v int32
+	comCall(w.settings, setGetIsZoomControlEnabled, uintptr(unsafe.Pointer(&v)))
+	return v != 0, true
+}
+
+// TestUserZoom zooms the page of a window as the user's Ctrl+wheel does,
+// through the controller's zoom, behind SetZoom's back. ok is false
+// without a web view.
+func TestUserZoom(hwnd uintptr, f float64) (ok bool) {
+	w := theBackend.windows[hwnd]
+	if w == nil || w.controller == 0 {
+		return false
+	}
+	comCallFloat(w.controller, ctlPutZoomFactor, f)
+	return true
+}
+
 // TestWheelSurface turns a mouse's wheel a notch down at (x, y), in DIPs,
 // in a window showing native UI, with the message Windows sends for it,
 // over whatever shows there: the content, or a web view's page.

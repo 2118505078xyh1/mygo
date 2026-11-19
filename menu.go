@@ -188,6 +188,10 @@ type MenuItem struct {
 	// native is the backend's number of an item of a web view's own
 	// context menu (ContextMenuEvent), 0 for the app's items.
 	native int
+	// userZoom marks the zoom items of the default menu
+	// (defaultViewMenu), which MyGo put there, not the app: they zoom
+	// only a page with PageOptions.ZoomControl.
+	userZoom bool
 }
 
 // Menu is a list of menu items used as application menu, window menu,
@@ -679,6 +683,9 @@ func menuItemClicked(uid int, win *Window) {
 	case MenuItemRadio:
 		it.SetChecked(true)
 	}
+	if it.userZoom && win != nil && !win.zoomControl {
+		return
+	}
 	performRole(it.Role, win)
 	if it.Click != nil {
 		// The context menu of a web view's page is its window's.
@@ -1062,7 +1069,23 @@ func defaultMenu() *Menu {
 		{Role: RoleAppMenu},
 		{Role: RoleFileMenu},
 		{Role: RoleEditMenu},
-		{Role: RoleViewMenu},
+		{Role: RoleViewMenu, Submenu: defaultViewMenu()},
 		{Role: RoleWindowMenu},
 	})
+}
+
+// defaultViewMenu is the View menu of the default menu. Its zoom items
+// are the user's way to zoom a page, as Ctrl+wheel is in WebView2, which
+// the app has not asked for: they zoom only a page with
+// PageOptions.ZoomControl. The same items in the app's own menu zoom any
+// page.
+func defaultViewMenu() []*MenuItem {
+	items := roleSubmenu(RoleViewMenu)
+	for _, it := range items {
+		switch it.Role {
+		case RoleResetZoom, RoleZoomIn, RoleZoomOut:
+			it.userZoom = true
+		}
+	}
+	return items
 }

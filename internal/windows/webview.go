@@ -4,6 +4,7 @@ package windows
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -226,7 +227,10 @@ func (w *window) setUp(controller uintptr) {
 		release(s3)
 	}
 	comCall(s, setPutAreDefaultContextMenusEnabled, 1)
-	comCall(s, setPutIsZoomControlEnabled, 1)
+	// Ctrl+wheel zooms the page, and so do Ctrl+Plus and Ctrl+Minus
+	// where the browser's keys are on, only if it asks: WKWebView and
+	// WebKitGTK have no such zoom. SetZoom zooms either way.
+	comCall(s, setPutIsZoomControlEnabled, boolArg(o.ZoomControl))
 	// WebView2 has a touchscreen's pinch zoom and swipe navigation on:
 	// they are off unless the page asks, as in WKWebView.
 	if s5 := queryInterface(s, &iidICoreWebView2Settings5); s5 != 0 {
@@ -313,6 +317,15 @@ func (w *window) setUp(controller uintptr) {
 	w.filterAllRequests()
 	withHandler(w.acceleratorKeyPressed, func(h uintptr) uintptr {
 		return comCall(controller, ctlAddAcceleratorKeyPressed, h, uintptr(unsafe.Pointer(&tok)))
+	})
+	// Zoom reports the user's zoom too, which WebView2 drops as the page
+	// navigates.
+	withHandler(func(_, _ uintptr) {
+		if w.userZoomed() {
+			w.h.ZoomChanged()
+		}
+	}, func(h uintptr) uintptr {
+		return comCall(controller, ctlAddZoomFactorChanged, h, uintptr(unsafe.Pointer(&tok)))
 	})
 
 	if w.host != nil {
@@ -455,8 +468,8 @@ func (w *window) navigationCompleted(_, args uintptr) {
 			comCall(w.webview, wvReload)
 			return
 		}
-		if zoomByScript && w.zoom != 1 {
-			putZoom(w, w.zoom) // a new document starts unzoomed
+		if zoomByScript && w.zoom != cmp.Or(w.userZoom, 1) {
+			putZoom(w, w.zoom) // a new document starts without CSS zoom
 		}
 		w.h.LoadFinished()
 		return

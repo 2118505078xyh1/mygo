@@ -247,7 +247,9 @@ mygo.App.SetMenu(menu)
 On macOS the menu bar belongs to the app. Apps get a default one, with the
 app, File, Edit, View and Window menus, until they set their own: keep
 `RoleAppMenu` and `RoleEditMenu` in yours, which make Cmd+Q and copy and
-paste work.
+paste work. The zoom items of its View menu zoom only a page whose options
+let the user zoom it ([`ZoomControl`](windows.md#the-users-zoom)), as the
+user's zoom does on Windows; the same items in your menu zoom any page.
 
 On Linux and Windows menu bars belong to windows. `App.SetMenu` gives its
 menu to every window without one of its own, `Window.SetMenu` gives a

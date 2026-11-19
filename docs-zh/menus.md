@@ -122,7 +122,7 @@ MyGo 对每个图像只解码和缩放一次，无论多少菜单项显示同一
 mygo.App.SetMenu(menu)
 ```
 
-在 macOS 上，菜单栏属于应用。应用会得到一个默认菜单栏，包含应用、文件、编辑、视图和窗口菜单，直到应用设置自己的菜单栏：在你的菜单中保留 `RoleAppMenu` 和 `RoleEditMenu`，有了它们，Cmd+Q 以及复制和粘贴才能工作。
+在 macOS 上，菜单栏属于应用。应用会得到一个默认菜单栏，包含应用、文件、编辑、视图和窗口菜单，直到应用设置自己的菜单栏：在你的菜单中保留 `RoleAppMenu` 和 `RoleEditMenu`，有了它们，Cmd+Q 以及复制和粘贴才能工作。其“视图”菜单中的缩放菜单项只缩放其选项允许用户缩放的页面（[`ZoomControl`](windows.md#用户的缩放)），如同 Windows 上用户的缩放；你的菜单中相同的菜单项会缩放任何页面。
 
 在 Linux 和 Windows 上，菜单栏属于窗口。`App.SetMenu` 会把菜单给每个没有自己菜单的窗口，`Window.SetMenu` 则给窗口设置自己的菜单；窗口默认没有菜单，但带[文稿](documents.md)的应用除外，它们会得到文件和编辑菜单。`App.SetMenu(nil)` 移除菜单。
 
