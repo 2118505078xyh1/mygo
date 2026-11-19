@@ -2,6 +2,7 @@ package ui
 
 import (
 	"runtime"
+	"slices"
 	"sync"
 
 	"github.com/egoist/mygo/internal/text"
@@ -43,22 +44,33 @@ func takeTesterText() *text.System {
 		s := p.idle[n-1]
 		p.idle[n-1] = nil
 		p.idle = p.idle[:n-1]
+		p.mu.Unlock()
+		s.Reuse()
+		p.mu.Lock()
 		return s
 	}
 	p.made++
 	return text.New()
 }
 
-// leaveTesterText takes back the text system of a Tester that ended,
-// readied for the next (System.Reuse), or lets it go if enough are idle.
+// leaveTesterText takes back the text system of a Tester that ended, or
+// lets it go if enough are idle. The next Tester readies it (System.Reuse):
+// this runs as a cleanup, while another Tester may be counting a frame's
+// allocations (testing.AllocsPerRun counts the process's), so it
+// allocates nothing once the pool has room.
 func leaveTesterText(s *text.System) {
-	s.Reuse()
 	p := &testerTexts
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if len(p.idle) < maxIdleTesterTexts() {
-		p.idle = append(p.idle, s)
+	max := maxIdleTesterTexts()
+	if len(p.idle) >= max {
+		return
 	}
+	// Room for all at once, the first time.
+	if room := min(max, 256); cap(p.idle) < room {
+		p.idle = slices.Grow(p.idle, room-len(p.idle))
+	}
+	p.idle = append(p.idle, s)
 }
 
 // keepText has the Tester's text system go back to the Testers after it

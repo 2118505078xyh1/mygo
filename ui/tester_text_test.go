@@ -106,7 +106,8 @@ func TestConcurrentTestersHaveTheirOwnTextSystems(t *testing.T) {
 	wg.Wait()
 }
 
-// A text system an ended Tester leaves starts as a new one for the next:
+// A text system an ended Tester leaves starts as a new one for the next,
+// which readies it (Reuse) as it takes it:
 // with no language and empty atlases, whatever the Tester set and drew,
 // and it draws a view as it did before.
 func TestReusedTextSystemStartsAnew(t *testing.T) {
@@ -128,6 +129,7 @@ func TestReusedTextSystemStartsAnew(t *testing.T) {
 		t.Fatal("the fixture did not grow an atlas")
 	}
 	tt.end()
+	s.Reuse() // as the Tester that takes it does
 	if l := s.Language(); l != "" {
 		t.Errorf("the text system left has language %q; want none", l)
 	}
