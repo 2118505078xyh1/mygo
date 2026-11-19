@@ -539,7 +539,7 @@ type cached struct {
 var shared = sync.OnceValue(newSystem)
 
 func newSystem() *System {
-	return &System{
+	s := &System{
 		fonts:     map[Style]*Font{},
 		layouts:   map[Params]*cached{},
 		marks:     map[markKey]float32{},
@@ -549,11 +549,16 @@ func newSystem() *System {
 		masks:     map[uint64]*atlasEntry{},
 		transient: map[uint64]GlyphImage{},
 		recent:    map[uint64]uint64{},
-		MaskAtlas: scene.NewAtlas(1, 256, 256),
-		// Most interfaces have no color or subpixel glyphs. Keep just a
-		// transparent texel until one asks for room.
-		ColorAtlas: scene.NewAtlas(4, 1, 1),
 	}
+	s.MaskAtlas, s.ColorAtlas = newAtlases()
+	return s
+}
+
+// newAtlases returns the glyph atlases a System starts with.
+func newAtlases() (mask, color *scene.Atlas) {
+	// Most interfaces have no color or subpixel glyphs. Keep just a
+	// transparent texel until one asks for room.
+	return scene.NewAtlas(1, 256, 256), scene.NewAtlas(4, 1, 1)
 }
 
 // Shared returns the process-wide text system.
@@ -568,6 +573,36 @@ func New() *System {
 	s := newSystem()
 	s.apart = true
 	return s
+}
+
+// Reuse readies a System New made, which a window drew in, for another
+// window, as a Tester takes the one an earlier Tester left (package ui
+// keeps them): what it made that depends on no window stays, so that the
+// next window need not make it again: its engine with the fonts it
+// found, the text it laid out, the widths of its ellipses. What the window
+// set goes, its language, and so do the glyph atlases: they start empty,
+// as a new System's, so that the next window fills them as it would a new
+// System's, through the same growth and room made. The window must have
+// set nothing else (SetUIFamily, SetFontRendering), as a Tester's sets
+// nothing else; the Use functions it called stay, which only let layouts
+// do what their Params ask for.
+func (s *System) Reuse() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lang != "" {
+		s.lang = ""
+		s.gen++
+		s.clearLayouts()
+		clear(s.marks)
+	}
+	s.MaskAtlas, s.ColorAtlas = newAtlases()
+	clear(s.glyphs)
+	clear(s.runs)
+	clear(s.masks)
+	clear(s.transient)
+	clear(s.recent)
+	s.forgetLeftOut()
+	s.rooms = 0
 }
 
 // appFonts are the fonts the app registered for all its text
