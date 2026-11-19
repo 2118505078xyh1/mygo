@@ -4067,6 +4067,11 @@ func TestContentWindowComposingReturn(t *testing.T) {
 // Backspace on (deleteBackward:), and the input gets it, empty too, as it
 // does from the input method of the test's Mac.
 func TestContentWindowComposingBackspace(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		// Only AppKit's input methods compose over the text before the
+		// caret without marked text, which pressKeyComposingOver drives.
+		t.Skip("input method automation not available on this platform")
+	}
 	var frames atomic.Int32
 	name, backspaces := "", 0
 	view := func(c *ui.Context) {
