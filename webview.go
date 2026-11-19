@@ -96,7 +96,6 @@ func (w *Window) newWebView(opts WebViewOptions, bg *background) (*WebView, erro
 		pw.background = nil
 	}
 	pw.devTools = popts.DevTools
-	pw.zoomControl = popts.ZoomControl
 	if s := opts.Page.Session; s != nil {
 		store, err := s.attach()
 		if err != nil {

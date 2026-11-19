@@ -364,12 +364,10 @@ type PageOptions struct {
 	//   - Windows: Ctrl+wheel, and Ctrl+Plus and Ctrl+Minus where the
 	//     browser's keys are on, which come with DevTools (WebView2's
 	//     IsZoomControlEnabled).
-	//   - macOS: Actual Size, Zoom In and Zoom Out of the default menu,
-	//     which MyGo installs while the app sets none (Cmd+0, Cmd+Plus and
-	//     Cmd+Minus); without ZoomControl they leave the page as it is.
-	//     WKWebView zooms with no key or wheel of its own.
+	//   - macOS: nothing, as WKWebView zooms with no key or wheel of its
+	//     own; the zoom items of the default menu zoom any page.
 	//   - Linux: nothing, as WebKitGTK zooms with no key or wheel of its
-	//     own and the app has no default menu.
+	//     own.
 	ZoomControl bool
 	// UserAgentSuffix appends to the page's user agent instead of
 	// replacing it, as UserAgent does: the app's name and version, such as

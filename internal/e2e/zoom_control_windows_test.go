@@ -3,10 +3,12 @@
 package e2e
 
 import (
+	"math"
 	"sync/atomic"
 	"testing"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/internal/wait"
 	win "github.com/egoist/mygo/internal/windows"
 	"github.com/egoist/mygo/ui"
 )
@@ -79,20 +81,30 @@ func TestUserZoomReported(t *testing.T) {
 	w.Page().LoadHTML(gesturesPage, "")
 	waitFor(t, w, "window.ready")
 
-	var ok bool
-	mygo.RunOnMain(func() { ok = win.TestUserZoom(w.NativeHandle(), 1.5) })
+	var (
+		got float64
+		hr  uintptr
+		ok  bool
+	)
+	mygo.RunOnMain(func() { got, hr, ok = win.TestUserZoom(w.NativeHandle(), 1.5) })
 	if !ok {
 		t.Fatal("the page has no web view")
 	}
-	eventually(t, "ZoomFactor to follow the user's zoom", func() bool { return w.Page().ZoomFactor() == 1.5 })
+	if int32(uint32(hr)) < 0 || math.Abs(got-1.5) > 1e-6 {
+		t.Fatalf("the controller's zoom put to 1.5 reads %v (HRESULT %#x)", got, hr)
+	}
+	near := func(a, b float64) bool { return math.Abs(a-b) < 1e-6 }
+	if !wait.Poll(func() bool { return near(w.Page().ZoomFactor(), 1.5) }) {
+		t.Fatalf("ZoomFactor stays %v after the user's zoom to 1.5 (the controller's %v)", w.Page().ZoomFactor(), got)
+	}
 
 	w.Page().SetZoomFactor(1.25)
-	if z := w.Page().ZoomFactor(); z != 1.25 {
+	if z := w.Page().ZoomFactor(); !near(z, 1.25) {
 		t.Errorf("ZoomFactor after SetZoomFactor(1.25) = %v", z)
 	}
 	// A script's round trip, after which WebView2 has told of the zoom.
 	waitFor(t, w, "window.ready")
-	if z := w.Page().ZoomFactor(); z != 1.25 {
+	if z := w.Page().ZoomFactor(); !near(z, 1.25) {
 		t.Errorf("ZoomFactor once WebView2 told of SetZoomFactor(1.25) = %v", z)
 	}
 }

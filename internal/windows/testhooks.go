@@ -799,15 +799,17 @@ func TestZoomControl(hwnd uintptr, webView int) (on, ok bool) {
 }
 
 // TestUserZoom zooms the page of a window as the user's Ctrl+wheel does,
-// through the controller's zoom, behind SetZoom's back. ok is false
-// without a web view.
-func TestUserZoom(hwnd uintptr, f float64) (ok bool) {
+// through the controller's zoom, behind SetZoom's back, and reads that
+// zoom back. hr is put_ZoomFactor's result. ok is false without a web
+// view.
+func TestUserZoom(hwnd uintptr, f float64) (got float64, hr uintptr, ok bool) {
 	w := theBackend.windows[hwnd]
 	if w == nil || w.controller == 0 {
-		return false
+		return 0, 0, false
 	}
-	comCallFloat(w.controller, ctlPutZoomFactor, f)
-	return true
+	hr = comCallFloat(w.controller, ctlPutZoomFactor, f)
+	comCall(w.controller, ctlGetZoomFactor, uintptr(unsafe.Pointer(&got)))
+	return got, hr, true
 }
 
 // TestWheelSurface turns a mouse's wheel a notch down at (x, y), in DIPs,

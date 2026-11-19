@@ -355,9 +355,6 @@ type Window struct {
 	conn         *surface.Conn
 	devTools     bool
 	invalidating atomic.Bool
-	// zoomControl is PageOptions.ZoomControl, which the default menu's
-	// zoom items ask (MenuItem.userZoom).
-	zoomControl bool
 	// userScripts are the scripts the window's pages run at document
 	// start: the bridge, the preferences and the preload script. Main
 	// thread only.
@@ -678,7 +675,6 @@ func newWindow(opts WindowOptions, bg, tint *background, native uintptr, flyout 
 		popts.Center = false
 	}
 	w.devTools = popts.DevTools
-	w.zoomControl = popts.ZoomControl
 	if w.stateKey != "" {
 		restoreWindowState(w.stateKey, popts)
 	} else {
