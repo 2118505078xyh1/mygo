@@ -735,6 +735,7 @@ class NotifyCall(
     @JvmField var body: String = "",
     @JvmField var group: String = "",
     @JvmField var silent: Boolean = false,
+    @JvmField var level: Long = 0L,
 ) {
     constructor(r: WireReader) : this() {
         req = r.int()
@@ -744,6 +745,7 @@ class NotifyCall(
         body = r.string()
         group = r.string()
         silent = r.bool()
+        level = r.int()
     }
 }
 

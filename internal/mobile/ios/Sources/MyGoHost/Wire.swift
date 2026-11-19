@@ -715,6 +715,7 @@ public struct NotifyCall {
     public var body: String = ""
     public var group: String = ""
     public var silent: Bool = false
+    public var level: Int = 0
     public init() {}
     init(_ r: inout WireReader) {
         req = r.int()
@@ -724,6 +725,7 @@ public struct NotifyCall {
         body = r.string()
         group = r.string()
         silent = r.bool()
+        level = r.int()
     }
 }
 
