@@ -798,10 +798,11 @@ func TestZoomControl(hwnd uintptr, webView int) (on, ok bool) {
 	return v != 0, true
 }
 
-// TestUserZoom zooms the page of a window as the user's Ctrl+wheel does,
-// through the controller's zoom, behind SetZoom's back, and reads that
-// zoom back. hr is put_ZoomFactor's result. ok is false without a web
-// view.
+// TestUserZoom zooms the page of a window as the user's Ctrl+wheel does:
+// it puts the controller's zoom behind SetZoom's back, reads it back, and
+// then runs what the controller's ZoomFactorChanged runs, which WebView2
+// raises for the user's zoom but not for put_ZoomFactor. hr is
+// put_ZoomFactor's result. ok is false without a web view.
 func TestUserZoom(hwnd uintptr, f float64) (got float64, hr uintptr, ok bool) {
 	w := theBackend.windows[hwnd]
 	if w == nil || w.controller == 0 {
@@ -809,6 +810,7 @@ func TestUserZoom(hwnd uintptr, f float64) (got float64, hr uintptr, ok bool) {
 	}
 	hr = comCallFloat(w.controller, ctlPutZoomFactor, f)
 	comCall(w.controller, ctlGetZoomFactor, uintptr(unsafe.Pointer(&got)))
+	w.zoomFactorChanged()
 	return got, hr, true
 }
 

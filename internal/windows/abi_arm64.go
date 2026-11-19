@@ -26,7 +26,7 @@ func putZoom(w *window, f float64) {
 const zoomByScript = true
 
 // userZoomed takes the controller's zoom, which only the user changes
-// here (Ctrl+wheel), or WebView2 as it drops theirs on a navigation,
+// here (Ctrl+wheel), or WebView2 as the page navigates to another site,
 // after it changed, and reports whether it is new. The page's zoom is
 // the CSS one times it.
 func (w *window) userZoomed() bool {

@@ -73,9 +73,9 @@ func TestZoomControl(t *testing.T) {
 }
 
 // TestUserZoomReported zooms a page as the user's Ctrl+wheel does, through
-// WebView2's controller behind SetZoomFactor's back: Page.ZoomFactor
-// follows, and SetZoomFactor still sets the zoom after it, which the
-// change WebView2 reports of it leaves as it is.
+// WebView2's controller behind SetZoomFactor's back, and runs what its
+// ZoomFactorChanged runs, which WebView2 raises for the user's zoom only:
+// Page.ZoomFactor follows, and SetZoomFactor still sets the zoom after it.
 func TestUserZoomReported(t *testing.T) {
 	w := newWindow(t, mygo.WindowOptions{Title: "User zoom", Width: 300, Height: 200, Page: mygo.PageOptions{ZoomControl: true}})
 	w.Page().LoadHTML(gesturesPage, "")

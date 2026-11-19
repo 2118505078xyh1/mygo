@@ -927,8 +927,9 @@ mygo.NewWindow(mygo.WindowOptions{
 | Linux | nothing: WebKitGTK zooms on no key or wheel itself |
 
 `Page.ZoomFactor` reports the user's zoom, and the page hears it as it
-hears `SetZoomFactor`'s. WebView2 drops the user's zoom as the page
-navigates, back to the app's.
+hears `SetZoomFactor`'s. WebView2 keeps a zoom per site: as the page
+navigates to another site, it may put back the one that site had, and
+`ZoomFactor` follows that too.
 
 Before `ZoomControl`, WebView2 let the user zoom every page with Ctrl+wheel:
 a page that should still zoom so sets it.

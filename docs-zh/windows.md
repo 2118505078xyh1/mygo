@@ -597,7 +597,7 @@ mygo.NewWindow(mygo.WindowOptions{
 | macOS | 无：WKWebView 自身不会因任何按键或滚轮而缩放 |
 | Linux | 无：WebKitGTK 自身不会因任何按键或滚轮而缩放 |
 
-`Page.ZoomFactor` 会报告用户的缩放，页面也会像得知 `SetZoomFactor` 的缩放那样得知它。页面导航时，WebView2 会丢弃用户的缩放，回到应用的缩放。
+`Page.ZoomFactor` 会报告用户的缩放，页面也会像得知 `SetZoomFactor` 的缩放那样得知它。WebView2 会为每个站点记住一个缩放：页面导航到另一个站点时，它可能恢复该站点上次的缩放，`ZoomFactor` 也会随之变化。
 
 在有 `ZoomControl` 之前，WebView2 允许用户用 Ctrl+滚轮缩放每个页面：仍应如此缩放的页面需要设置它。
 

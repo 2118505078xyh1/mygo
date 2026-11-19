@@ -318,13 +318,10 @@ func (w *window) setUp(controller uintptr) {
 	withHandler(w.acceleratorKeyPressed, func(h uintptr) uintptr {
 		return comCall(controller, ctlAddAcceleratorKeyPressed, h, uintptr(unsafe.Pointer(&tok)))
 	})
-	// Zoom reports the user's zoom too, which WebView2 drops as the page
-	// navigates.
-	withHandler(func(_, _ uintptr) {
-		if w.userZoomed() {
-			w.h.ZoomChanged()
-		}
-	}, func(h uintptr) uintptr {
+	// Zoom reports the user's zoom too, and WebView2's own, which keeps
+	// one per site, as the page navigates. It runs for no put_ZoomFactor,
+	// so not for SetZoom's.
+	withHandler(func(_, _ uintptr) { w.zoomFactorChanged() }, func(h uintptr) uintptr {
 		return comCall(controller, ctlAddZoomFactorChanged, h, uintptr(unsafe.Pointer(&tok)))
 	})
 
@@ -929,6 +926,14 @@ func (w *window) SetZoom(f float64) {
 }
 
 func (w *window) Zoom() float64 { return w.zoom }
+
+// zoomFactorChanged follows a zoom the user chose, which the controller's
+// ZoomFactorChanged tells of.
+func (w *window) zoomFactorChanged() {
+	if w.userZoomed() {
+		w.h.ZoomChanged()
+	}
+}
 
 // setUpUserAgent applies UserAgent and UserAgentSuffix, which appends to
 // WebView2's own user agent when it is all that is set.
