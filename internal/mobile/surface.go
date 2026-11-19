@@ -638,7 +638,8 @@ func (b *Backend) handleSurface(op uint64, r *wire.Reader, w *wire.Writer) bool 
 		e.Decode(r)
 		if s := sf(e.ID); s != nil && s.handle != 0 {
 			s.handle = 0
-			// The content lets go of its renderer at once.
+			// The content lets go of what draws into the surface at once:
+			// on Android its EGL surface, keeping the context for the next.
 			s.send(platform.SurfaceEvent{Kind: platform.SurfaceRenew})
 		}
 	case wire.EventTouch:

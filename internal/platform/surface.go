@@ -531,7 +531,9 @@ const (
 	DataDrop
 	// SurfaceRenew reports that the native objects a GPU renderer draws
 	// into changed (Surface.Native), as a window of Windows composes its
-	// frames once it has web views: the content makes its renderer again.
+	// frames once it has web views: the content makes its renderer again,
+	// or, for one that outlives them (Android's EGL context), lets go of
+	// what draws into the old ones and attaches it to the new ones.
 	SurfaceRenew
 	// WebViewPress reports that Button went down at X, Y on a web view
 	// the content shows there (Surface.PlaceWebViews), which takes the

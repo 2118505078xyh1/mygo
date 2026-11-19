@@ -123,6 +123,10 @@ type windowHost struct {
 	conn *surface.Conn
 	rt   *engine
 	gpu  gpuRenderer
+	// parked is the GPU renderer kept while the surface has no native
+	// objects to draw into, since SurfaceRenew (renewableRenderer): the
+	// next makeGPU attaches it to the new ones.
+	parked renewableRenderer
 	// gpuTried tells that the first frame tried the GPU, onGPU that its
 	// renderer drew on a GPU, degraded that one drawing in software took
 	// its place, and gpuSince when the renderer was made. After a failure,
@@ -326,11 +330,15 @@ func (h *windowHost) event(ev platform.SurfaceEvent) bool {
 	}
 	if ev.Kind == platform.SurfaceRenew {
 		// The next frame makes the renderer again, for the surface's new
-		// native objects.
-		if h.gpu != nil {
+		// native objects, or attaches the one kept to them.
+		if r, ok := h.gpu.(renewableRenderer); ok {
+			r.Detach()
+			h.releaseParked()
+			h.parked = r
+		} else if h.gpu != nil {
 			h.gpu.Release()
-			h.gpu = nil
 		}
+		h.gpu = nil
 		h.gpuTried, h.retryAt = false, time.Time{}
 		h.renewed = true
 		h.requestFrame()
@@ -339,12 +347,14 @@ func (h *windowHost) event(ev platform.SurfaceEvent) bool {
 	if ev.Kind >= platform.SurfaceLowMemory && ev.Kind <= platform.SurfaceStackPopped {
 		if ev.Kind == platform.SurfaceLowMemory {
 			// What the next frame makes again: the renderer's textures, its
-			// atlases and pipelines among them.
+			// atlases and pipelines among them, and a renderer kept while
+			// the surface has none to draw into.
 			if h.gpu != nil {
 				h.gpu.Release()
 				h.gpu = nil
 				h.gpuTried, h.retryAt = false, time.Time{}
 			}
+			h.releaseParked()
 			h.requestFrame()
 		}
 		if touchSystem != nil {
@@ -428,6 +438,26 @@ type gpuRenderer interface {
 // size, as a GtkGLArea makes its buffers anew as GTK allocates it:
 // Invalidate has the next frame draw whole.
 type invalidator interface{ Invalidate() }
+
+// renewableRenderer is a GPU renderer that outlives the surface's native
+// objects (Android's, whose EGL context keeps its programs and textures
+// while the SurfaceView's surface goes and comes back): on SurfaceRenew,
+// Detach lets go of what draws into the old ones, and Attach draws into
+// the new ones, or reports why it cannot, and the renderer is then
+// released and made again. It draws whole after Attach (invalidator).
+type renewableRenderer interface {
+	gpuRenderer
+	Detach()
+	Attach(n platform.SurfaceNative) error
+}
+
+// releaseParked releases the renderer kept since SurfaceRenew.
+func (h *windowHost) releaseParked() {
+	if h.parked != nil {
+		h.parked.Release()
+		h.parked = nil
+	}
+}
 
 // occludedRenderer is a GPU renderer that gives back the memory of its
 // frames sooner while nothing of the window shows (Metal's, whose
@@ -661,7 +691,11 @@ func (h *windowHost) makeGPU() {
 	if os.Getenv("MYGO_GPU") == "0" || n == (platform.SurfaceNative{}) {
 		return
 	}
-	r, err := newGPU(n)
+	var err error
+	r := h.attachParked(n)
+	if r == nil {
+		r, err = newGPU(n)
+	}
 	switch {
 	case err != nil:
 		log.Printf("mygo: drawing without the GPU: %v", err)
@@ -692,6 +726,27 @@ func (h *windowHost) makeGPU() {
 		// Frames waiting for the display draw through the main thread.
 		p.SetPost(h.conn.Post)
 	}
+}
+
+// attachParked returns the renderer kept since SurfaceRenew, drawing
+// into the surface's new native objects n, and nil when there is none or
+// it cannot: then it is released, and a new one made.
+func (h *windowHost) attachParked(n platform.SurfaceNative) gpuRenderer {
+	r := h.parked
+	if r == nil {
+		return nil
+	}
+	h.parked = nil
+	if err := r.Attach(n); err != nil {
+		log.Printf("mygo: making the GPU renderer again: %v", err)
+		r.Release()
+		return nil
+	}
+	if i, ok := r.(invalidator); ok {
+		// What it drew went with the old native objects.
+		i.Invalidate()
+	}
+	return r
 }
 
 // tellOccluded tells the GPU renderer whether nothing of the window shows,
@@ -793,6 +848,7 @@ func (h *windowHost) detach() {
 		h.gpu.Release()
 		h.gpu = nil
 	}
+	h.releaseParked()
 	// The last frame, and the bitmaps it drew, go with the window (#1281).
 	h.last = nil
 	h.placed, h.views, h.glassPlaced = nil, nil, nil
