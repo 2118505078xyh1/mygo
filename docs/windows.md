@@ -907,11 +907,11 @@ MyGo turns them off unless the page asks for them.
 ### The user's zoom
 
 A page zooms as the app zooms it, with `ZoomFactor` and `SetZoomFactor` or
-the zoom items of the app's own menu (`RoleZoomIn`, `RoleZoomOut` and
-`RoleResetZoom`), and not as the user does in a browser, as desktop apps
-do: an app whose pages are its UI keeps them at the size it laid them out
-at. `ZoomControl` lets the user zoom the page too, for a window's page and
-a [web view's](ui/web-view.md) alike:
+the zoom items of a View menu (`RoleZoomIn`, `RoleZoomOut` and
+`RoleResetZoom`, the default menu's on macOS too), and not as the user
+does in a browser, as desktop apps do: an app whose pages are its UI keeps
+them at the size it laid them out at. `ZoomControl` lets the user zoom the
+page too, for a window's page and a [web view's](ui/web-view.md) alike:
 
 ```go
 mygo.NewWindow(mygo.WindowOptions{
@@ -923,16 +923,15 @@ mygo.NewWindow(mygo.WindowOptions{
 | | `ZoomControl` |
 |---|---|
 | Windows | Ctrl+wheel, and Ctrl+Plus and Ctrl+Minus where WebView2's own keys are on, which come with the [inspector](frontend.md#the-web-inspector) (`IsZoomControlEnabled`) |
-| macOS | Actual Size, Zoom In and Zoom Out of the default menu's View menu (Cmd+0, Cmd+Plus and Cmd+Minus), which an app has while it sets no menu of its own; WKWebView zooms on no key or wheel itself |
-| Linux | nothing: WebKitGTK zooms on no key or wheel itself, and apps have no default menu |
+| macOS | nothing: WKWebView zooms on no key or wheel itself |
+| Linux | nothing: WebKitGTK zooms on no key or wheel itself |
 
 `Page.ZoomFactor` reports the user's zoom, and the page hears it as it
 hears `SetZoomFactor`'s. WebView2 drops the user's zoom as the page
 navigates, back to the app's.
 
-Before `ZoomControl`, WebView2 let the user zoom every page with Ctrl+wheel,
-and the default menu's zoom items zoomed every page on macOS: a page that
-should still zoom so sets it.
+Before `ZoomControl`, WebView2 let the user zoom every page with Ctrl+wheel:
+a page that should still zoom so sets it.
 
 ### The theme color
 

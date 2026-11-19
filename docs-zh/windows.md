@@ -582,7 +582,7 @@ WebKitGTK 和 WebView2 默认开启捏合，WebView2 还默认开启滑动：除
 
 ### 用户的缩放
 
-页面按应用的缩放而缩放：通过 `ZoomFactor` 和 `SetZoomFactor`，或应用自己菜单中的缩放菜单项（`RoleZoomIn`、`RoleZoomOut` 和 `RoleResetZoom`），而不像在浏览器中那样随用户缩放，这与桌面应用的惯例一致：页面就是其界面的应用，会让页面保持它布局时的大小。`ZoomControl` 让用户也能缩放页面，窗口页面和 [web view](ui/web-view.md) 页面均适用：
+页面按应用的缩放而缩放：通过 `ZoomFactor` 和 `SetZoomFactor`，或“视图”菜单中的缩放菜单项（`RoleZoomIn`、`RoleZoomOut` 和 `RoleResetZoom`，macOS 默认菜单中的也是），而不像在浏览器中那样随用户缩放，这与桌面应用的惯例一致：页面就是其界面的应用，会让页面保持它布局时的大小。`ZoomControl` 让用户也能缩放页面，窗口页面和 [web view](ui/web-view.md) 页面均适用：
 
 ```go
 mygo.NewWindow(mygo.WindowOptions{
@@ -594,12 +594,12 @@ mygo.NewWindow(mygo.WindowOptions{
 | | `ZoomControl` |
 |---|---|
 | Windows | Ctrl+滚轮，以及在 WebView2 自带按键开启时的 Ctrl+加号和 Ctrl+减号，这些按键随[检查器](frontend.md#网页检查器)一起提供（`IsZoomControlEnabled`） |
-| macOS | 默认菜单的“视图”菜单中的“实际大小”“放大”和“缩小”（Cmd+0、Cmd+加号和 Cmd+减号），应用在未设置自己的菜单时才有默认菜单；WKWebView 自身不会因任何按键或滚轮而缩放 |
-| Linux | 无：WebKitGTK 自身不会因任何按键或滚轮而缩放，应用也没有默认菜单 |
+| macOS | 无：WKWebView 自身不会因任何按键或滚轮而缩放 |
+| Linux | 无：WebKitGTK 自身不会因任何按键或滚轮而缩放 |
 
 `Page.ZoomFactor` 会报告用户的缩放，页面也会像得知 `SetZoomFactor` 的缩放那样得知它。页面导航时，WebView2 会丢弃用户的缩放，回到应用的缩放。
 
-在有 `ZoomControl` 之前，WebView2 允许用户用 Ctrl+滚轮缩放每个页面，macOS 上默认菜单的缩放菜单项也会缩放每个页面：仍应如此缩放的页面需要设置它。
+在有 `ZoomControl` 之前，WebView2 允许用户用 Ctrl+滚轮缩放每个页面：仍应如此缩放的页面需要设置它。
 
 ### 主题色
 
