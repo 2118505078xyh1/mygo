@@ -451,8 +451,15 @@ func (b *htmlBuilder) node(n *xhtml.Node, a Attributes) {
 	case atom.Script, atom.Style, atom.Head, atom.Title, atom.Template, atom.Noscript:
 		return
 	case atom.Br:
-		b.begin()
-		b.flush()
+		// A <br> that ends a block only gives an empty block its height:
+		// HTML() writes an empty paragraph as <p><br></p>, and browsers
+		// show a <br> before a block closes as no line. Skip it so that
+		// parsing HTML() back does not double each blank line (#2095).
+		// A <br> with real content after it still breaks the paragraph.
+		if !brEndsBlock(n) {
+			b.begin()
+			b.flush()
+		}
 		return
 	case atom.Img:
 		src, alt := attr(n, "src"), attr(n, "alt")
@@ -565,6 +572,50 @@ func (b *htmlBuilder) node(n *xhtml.Node, a Attributes) {
 		b.flush()
 		b.style = saved
 	}
+}
+
+// brEndsBlock reports whether br is the last content of its block: only
+// whitespace text nodes and empty inline elements follow it before the
+// block closes. Such a <br> is the one HTML() uses to give an empty block
+// height, and browsers treat it as adding no line.
+func brEndsBlock(br *xhtml.Node) bool {
+	for n := br.NextSibling; n != nil; n = n.NextSibling {
+		switch n.Type {
+		case xhtml.TextNode:
+			if strings.TrimSpace(n.Data) != "" {
+				return false
+			}
+		case xhtml.ElementNode:
+			// A <br> is content; an empty inline element like <span></span>
+			// is not. Recurse so nested empty wrappers are handled too.
+			if n.DataAtom == atom.Br || !emptyInline(n) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// emptyInline reports whether n holds no content: only whitespace and
+// empty inline elements. Block elements always count as content.
+func emptyInline(n *xhtml.Node) bool {
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		switch c.Type {
+		case xhtml.TextNode:
+			if strings.TrimSpace(c.Data) != "" {
+				return false
+			}
+		case xhtml.ElementNode:
+			if !emptyInline(c) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // applyCSS applies the declarations of a style attribute to a run's
