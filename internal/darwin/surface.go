@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin && !ios
 
 package darwin
 
@@ -6,8 +6,8 @@ import (
 	"bytes"
 	"image"
 	pngenc "image/png"
-	"runtime"
 	"slices"
+	"strings"
 	"structs"
 	"sync"
 	"time"
@@ -17,6 +17,7 @@ import (
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
 
+	"github.com/egoist/mygo/internal/pacing"
 	"github.com/egoist/mygo/internal/platform"
 	"github.com/egoist/mygo/transfer"
 )
@@ -42,16 +43,15 @@ type cgRect struct {
 const nsNotFound = uint(1<<63 - 1)
 
 var (
-	surfaceOnce        sync.Once
-	msgConvertRectView func(obj id, sel objc.SEL, r NSRect, view id) NSRect
-	msgInitTracking    func(obj id, sel objc.SEL, r NSRect, options uint, owner, info id) id
-	msgTimer           func(cls id, sel objc.SEL, interval float64, target id, selector objc.SEL, info id, repeats bool) id
-	cgColorSpaceSRGB   uintptr
-	cgImageCreate      uintptr
-	cgImageRelease     uintptr
-	cgProviderCreate   uintptr
-	cgProviderRelease  uintptr
-	cfDataCreate       uintptr
+	surfaceOnce       sync.Once
+	msgInitTracking   func(obj id, sel objc.SEL, r NSRect, options uint, owner, info id) id
+	msgTimer          func(cls id, sel objc.SEL, interval float64, target id, selector objc.SEL, info id, repeats bool) id
+	cgColorSpaceSRGB  uintptr
+	cgImageCreate     uintptr
+	cgImageRelease    uintptr
+	cgProviderCreate  uintptr
+	cgProviderRelease uintptr
+	cfDataCreate      uintptr
 	// Read the keyboard type from each event, so an external ISO keyboard
 	// does not inherit the built-in keyboard's ANSI mapping.
 	cgEventGetIntegerValueField func(event uintptr, field uint32) int64
@@ -82,11 +82,6 @@ const (
 
 func loadSurface() {
 	surfaceOnce.Do(func() {
-		stret := msgSendAddr
-		if runtime.GOARCH == "amd64" {
-			stret = mustDlsym(libObjC, "objc_msgSend_stret")
-		}
-		purego.RegisterFunc(&msgConvertRectView, stret)
 		purego.RegisterFunc(&msgInitTracking, msgSendAddr)
 		purego.RegisterFunc(&msgTimer, msgSendAddr)
 		cgImageCreate = mustDlsym(libCG, "CGImageCreate")
@@ -175,6 +170,11 @@ type surface struct {
 	marked    string
 	markedSel nsRange
 	keyDown   bool // in interpretKeyEvents: text typed with the key
+	// withheld is the key keyDown: kept from the content while the input
+	// method composed, during interpretKeyEvents: doCommandBySelector:
+	// sends it if the input method ends the composition and passes the
+	// key on.
+	withheld *platform.SurfaceEvent
 	// refused: the content left the composition set in
 	// interpretKeyEvents, given up once it returns.
 	refused bool
@@ -186,8 +186,17 @@ type surface struct {
 	elements      map[uint64]*accessElement
 	topLevel      id
 	updating      bool
+	accessPending *platform.AccessTree
+	accessDead    bool
 	dataDrag      *macDataSource
 	dragOperation transfer.Operation
+	// pageDrag is the web view the drag came in over last, if any: its
+	// page takes the drag, and hears the rest of it (webViewAtDrag).
+	// pageDropped says the drop came, and the page took it: the rest of the
+	// drag (concludeDragOperation:) is the page's, but draggingExited:
+	// after it is AppKit's afterthought, not the page's.
+	pageDrag    *window
+	pageDropped bool
 	// placed are where the content shows the window's web views, under
 	// it (webview.go).
 	placed []platform.WebViewPlacement
@@ -207,7 +216,10 @@ func (w *window) createSurface(content NSRect) {
 	layer := send(s.view, "layer")
 	send(layer, "setContentsGravity:", uintptr(nsString("resize")))
 	// Tracking for hover, inside the visible part of the view.
-	const options = 0x01 | 0x02 | 0x04 | 0x40 | 0x200 // entered/exited, moved, cursor update, active app, visible rect
+	options := uint(0x01 | 0x02 | 0x04 | 0x40 | 0x200) // entered/exited, moved, cursor update, active app, visible rect
+	if w.opts.Panel || w.opts.Flyout != nil {
+		options = options&^0x40 | 0x80 // active always: panels and flyouts never make the app active
+	}
 	s.tracking = msgInitTracking(send(class("NSTrackingArea"), "alloc"), sel("initWithRect:options:owner:userInfo:"), NSRect{}, options, s.view, 0)
 	send(s.view, "addTrackingArea:", uintptr(s.tracking))
 	if respondsTo(s.view, "displayLinkWithTarget:selector:") {
@@ -219,6 +231,34 @@ func (w *window) createSurface(content NSRect) {
 	send(s.view, "registerForDraggedTypes:", uintptr(nsArray(nsString("public.file-url"))))
 	w.surface = s
 	w.b.bySurface[s.view] = s
+	w.b.watchCommandKeyUps()
+}
+
+// commandKeyUps is the monitor of the app's events that gives a surface
+// the keys let go of while Command is held, which NSApplication's
+// sendEvent: keeps from the key window, as it takes them for key
+// equivalents: the content would hold them on (Context.KeyDown). It is
+// made once, with the first surface.
+var commandKeyUps id
+
+func (b *Backend) watchCommandKeyUps() {
+	if commandKeyUps != 0 {
+		return
+	}
+	const mask = 1 << 11 // NSEventMaskKeyUp
+	blk := newBlock(func(_ objc.Block, ev id) id {
+		mods := eventMods(ev)
+		if mods&platform.ModSuper == 0 {
+			return ev
+		}
+		s := b.bySurface[send(send(ev, "window"), "firstResponder")]
+		if s == nil {
+			return ev
+		}
+		s.send(platform.SurfaceEvent{Kind: platform.KeyReleased, Key: eventKey(ev), PhysicalKey: physicalKey(ev), Code: eventKeyCode(ev), Mods: mods})
+		return 0
+	})
+	commandKeyUps = retain(send(class("NSEvent"), "addLocalMonitorForEventsMatchingMask:handler:", mask, uintptr(blk)))
 }
 
 func (s *surface) destroy() {
@@ -363,7 +403,20 @@ func (s *surface) RequestFrame() {
 	if s.w.closed {
 		return
 	}
-	if s.link != 0 {
+	if pacing.Uncapped {
+		s.frameSoon()
+		return
+	}
+	// The link does not tick for a window hidden or minimized, only for
+	// one covered: its frames come from the timer below, as without a
+	// link, or the one the view builds as the window hides (WindowHidden)
+	// would wait until it shows again. Package ui holds the others
+	// (holdFrame), which draw nothing, but only once the window server
+	// told that the window left the screen (occlusionState), which takes
+	// a pass of the run loop: drawn at once each (drawSoon), the frames of
+	// a view that asks for one in each would keep the backend's queue from
+	// ever emptying, and the main thread in it.
+	if s.link != 0 && sendBool(s.w.win, "isVisible") {
 		switch {
 		case s.linkRunning:
 			s.due = true
@@ -397,6 +450,27 @@ func (s *surface) RequestFrame() {
 	s.timing = true
 	withPool(func() {
 		t := msgTimer(class("NSTimer"), sel("timerWithTimeInterval:target:selector:userInfo:repeats:"), delay.Seconds(), s.view, sel("mygoTimer:"), 0, false)
+		send(send(class("NSRunLoop"), "mainRunLoop"), "addTimer:forMode:", uintptr(t), kCFRunLoopCommonModes)
+	})
+}
+
+// frameSoon draws a frame in the run loop's next pass, from a timer that
+// fires at once, for frames uncapped (MYGO_UNCAPPED): the next frame
+// starts as soon as the last was drawn, rather than at the display link's
+// next tick, and only while frames are asked for. The pass handles the
+// input that came meanwhile first. The backend's queue (drawSoon) would
+// draw it in this pass instead, and the next in it too, as the queue runs
+// until it is empty: input would wait for the frames to stop. The frame
+// is paced, so that the content leaves it to draw while the renderer
+// fetches the drawable of the next (FrameNow), rather than wait for it on
+// the main thread, which keeps each a frame of its own.
+func (s *surface) frameSoon() {
+	if s.timing {
+		return
+	}
+	s.timing = true
+	withPool(func() {
+		t := msgTimer(class("NSTimer"), sel("timerWithTimeInterval:target:selector:userInfo:repeats:"), 0, s.view, sel("mygoTimer:"), 0, false)
 		send(send(class("NSRunLoop"), "mainRunLoop"), "addTimer:forMode:", uintptr(t), kCFRunLoopCommonModes)
 	})
 }
@@ -435,6 +509,14 @@ func (s *surface) drawSoon() {
 		// A frame drawn since the last ask, as a resize's, drew what
 		// this one would.
 		if s.w.b.surfaceOf(s.view) != s || s.lastFrame != s.soonAfter {
+			return
+		}
+		if s.link != 0 && s.resized && s.presentsWithTransaction() {
+			// A frame for a new size after one presented with the
+			// transaction, drawn in a pass of its own, does not show
+			// (updateLayer): the link's next tick draws it.
+			s.lastFrame = time.Now()
+			s.RequestFrame()
 			return
 		}
 		s.frameNow(false)
@@ -581,12 +663,26 @@ var cursorSelectors = map[platform.Cursor]string{
 	platform.CursorCopy:         "dragCopyCursor",
 	platform.CursorAlias:        "dragLinkCursor",
 	platform.CursorContextMenu:  "contextualMenuCursor",
+	platform.CursorNoDrop:       "operationNotAllowedCursor",
+	// AppKit's _moveCursor raises an exception on macOS 27, though NSCursor
+	// implements it: the open hand is the nearest of AppKit's.
+	platform.CursorAllScroll: "openHandCursor",
+	// AppKit's own, which it keeps private, as WebKit uses them.
+	platform.CursorProgress: "busyButClickableCursor",
+	platform.CursorWait:     "_waitCursor",
+	platform.CursorHelp:     "_helpCursor",
+	platform.CursorZoomIn:   "_zoomInCursor",
+	platform.CursorZoomOut:  "_zoomOutCursor",
+	platform.CursorCell:     "_cellCursor",
 }
 
-// cursorFallbacks are the cursors of older macOS for those it lacks.
+// cursorFallbacks are the cursors of older macOS for those it lacks, and
+// the nearest public ones for the private ones that may go away.
 var cursorFallbacks = map[platform.Cursor]string{
 	platform.CursorResizeColumn: "resizeLeftRightCursor",
 	platform.CursorResizeRow:    "resizeUpDownCursor",
+	platform.CursorWait:         "busyButClickableCursor",
+	platform.CursorCell:         "crosshairCursor",
 }
 
 // applyCursor sets the content's cursor, unless the pointer is over a
@@ -630,13 +726,51 @@ func nsCursor(c platform.Cursor) id {
 	if !ok {
 		name = "arrowCursor"
 	}
-	if !respondsTo(cls, name) {
-		if name, ok = cursorFallbacks[c]; !ok {
+	if !hasCursor(cls, name) {
+		if name, ok = cursorFallbacks[c]; !ok || !hasCursor(cls, name) {
 			name = "arrowCursor"
 		}
 	}
 	return send(cls, name)
 }
+
+// hasCursor reports whether NSCursor has the class method name. AppKit's
+// private cursors (named with a leading underscore) must be among the
+// methods NSCursor itself implements, which macOS 27 lacks _waitCursor
+// and _cellCursor of: sending a selector it lacks raises an exception
+// that ends the app.
+func hasCursor(cls id, name string) bool {
+	if !strings.HasPrefix(name, "_") {
+		return respondsTo(cls, name)
+	}
+	ownCursorsOnce.Do(func() {
+		var copyMethods func(cls uintptr, n *uint32) unsafe.Pointer
+		var methodName func(m uintptr) objc.SEL
+		var getClass func(obj id) uintptr
+		var free func(p unsafe.Pointer)
+		purego.RegisterLibFunc(&copyMethods, libObjC, "class_copyMethodList")
+		purego.RegisterLibFunc(&methodName, libObjC, "method_getName")
+		purego.RegisterLibFunc(&getClass, libObjC, "object_getClass")
+		purego.RegisterLibFunc(&free, purego.RTLD_DEFAULT, "free")
+		var n uint32
+		list := copyMethods(getClass(cls), &n)
+		if list == nil {
+			return
+		}
+		ownCursors = map[objc.SEL]bool{}
+		for _, m := range unsafe.Slice((*uintptr)(list), n) {
+			ownCursors[methodName(m)] = true
+		}
+		free(list)
+	})
+	return ownCursors[sel(name)]
+}
+
+// ownCursors are the class methods NSCursor implements itself (hasCursor).
+var (
+	ownCursorsOnce sync.Once
+	ownCursors     map[objc.SEL]bool
+)
 
 var hiddenCursor id
 
@@ -776,7 +910,37 @@ func swipeBack(deltaX float64) (back, ok bool) {
 
 func (s *surface) mouse(kind platform.SurfaceEventKind, ev id, button int) {
 	x, y := s.location(ev)
-	s.send(platform.SurfaceEvent{Kind: kind, X: x, Y: y, Button: button, Clicks: sendInt(ev, "clickCount"), Mods: eventMods(ev)})
+	pointer, pressure := mouseDevice(ev)
+	s.send(platform.SurfaceEvent{Kind: kind, X: x, Y: y, Button: button, Clicks: sendInt(ev, "clickCount"), Mods: eventMods(ev), Pointer: pointer, Pressure: pressure})
+}
+
+// mouseDevice returns the device of a mouse event, by its subtype, and its
+// pressure: a tablet's pen (NSEventSubtypeTabletPoint, or
+// TabletProximity as it comes near), whose pressure AppKit tells, or a
+// touch (NSEventSubtypeTouch). A mouse's pressure, 1 while a button is
+// down, and a Force Touch trackpad's, are left out: the content gives
+// devices without pressure Pointer Events' 0.5.
+func mouseDevice(ev id) (platform.PointerKind, float64) {
+	switch int16(sendInt(ev, "subtype")) {
+	case 1: // NSEventSubtypeTabletPoint
+		return platform.PointerPen, float64(msgFloat32(ev, sel("pressure")))
+	case 2: // NSEventSubtypeTabletProximity
+		return platform.PointerPen, 0
+	case 3: // NSEventSubtypeTouch
+		return platform.PointerTouch, 0
+	}
+	return platform.PointerMouse, 0
+}
+
+// tabletPoint sends a tablet's pen pressing harder or softer between its
+// moves, which AppKit sends as tablet events of their own (tabletPoint:),
+// as a move where the pointer is.
+func (s *surface) tabletPoint(ev id) {
+	p := msgPoint(class("NSEvent"), sel("mouseLocation"))
+	inWindow := msgRectToRect(s.w.win, sel("convertRectFromScreen:"), NSRect{Origin: p})
+	local := msgPointFromView(s.view, sel("convertPoint:fromView:"), inWindow.Origin, 0)
+	pressure := float64(msgFloat32(ev, sel("pressure")))
+	s.send(platform.SurfaceEvent{Kind: platform.PointerMove, X: local.X, Y: local.Y, Mods: eventMods(ev), Pointer: platform.PointerPen, Pressure: pressure})
 }
 
 // macKeys maps virtual key codes that do not type a character.
@@ -859,6 +1023,11 @@ func physicalKey(ev id) platform.Key {
 	if code != macISOSectionCode && code != macANSIGraveCode {
 		return keyAtCode(code)
 	}
+	return keyAtCodeForLayout(code, eventLayoutType(ev))
+}
+
+// eventLayoutType returns the layout type of the keyboard of a key event.
+func eventLayoutType(ev id) uint32 {
 	var keyboardType int16
 	if cgEvent := send(ev, "CGEvent"); cgEvent != 0 {
 		keyboardType = int16(cgEventGetIntegerValueField(uintptr(cgEvent), 10)) // kCGKeyboardEventKeyboardType
@@ -866,7 +1035,52 @@ func physicalKey(ev id) platform.Key {
 	if keyboardType == 0 { // Synthetic NSEvents can lack a keyboard type.
 		keyboardType = int16(lmGetKbdType())
 	}
-	return keyAtCodeForLayout(code, kbGetLayoutType(keyboardType))
+	return kbGetLayoutType(keyboardType)
+}
+
+// keyCodeForLayout returns the key by position of a virtual key code: an ISO
+// keyboard swaps the codes of the key left of 1 and the extra key beside the
+// left Shift, as keyAtCodeForLayout tells.
+func keyCodeForLayout(code uint16, layoutType uint32) platform.KeyCode {
+	if layoutType == macISOLayoutType {
+		switch code {
+		case macISOSectionCode:
+			return platform.CodeBackquote
+		case macANSIGraveCode:
+			return platform.CodeIntlBackslash
+		}
+	}
+	return platform.KeyCodeForMac(code)
+}
+
+// eventKeyCode returns the key by position of a key event.
+func eventKeyCode(ev id) platform.KeyCode {
+	code := uint16(send(ev, "keyCode"))
+	if code != macISOSectionCode && code != macANSIGraveCode {
+		return platform.KeyCodeForMac(code)
+	}
+	return keyCodeForLayout(code, eventLayoutType(ev))
+}
+
+// flagsChanged sends the key of a flagsChanged: event, which tells of a
+// modifier or Caps Lock going down or up, by position.
+func (s *surface) flagsChanged(ev id) {
+	code, down := platform.MacFlagsChanged(uint16(send(ev, "keyCode")), uint(send(ev, "modifierFlags")))
+	if code == platform.CodeUnknown {
+		return
+	}
+	mods := eventMods(ev)
+	if code == platform.CodeCapsLock {
+		// Told of once for each change of the lock, not as the key moves.
+		s.send(platform.SurfaceEvent{Kind: platform.RawKeyPressed, Code: code, Mods: mods})
+		s.send(platform.SurfaceEvent{Kind: platform.RawKeyReleased, Code: code, Mods: mods})
+		return
+	}
+	kind := platform.RawKeyReleased
+	if down {
+		kind = platform.RawKeyPressed
+	}
+	s.send(platform.SurfaceEvent{Kind: kind, Code: code, Mods: mods})
 }
 
 // stringOf returns the text of an NSString or NSAttributedString. Other
@@ -960,11 +1174,35 @@ func registerSurfaceClass() {
 			}
 		})
 	}
-	dragged := func(self id, _ objc.SEL, info id) uint {
+	// A drag over a web view is its page's. AppKit sends a drag to the view
+	// under the pointer, which is the surface: the web views are under it
+	// (webview.go), and only its hitTest: lets the pointer through, which
+	// AppKit asks the mouse's events, not a drag's. The surface hands the
+	// drag to the web view, whose page gets the events WebKit makes of it,
+	// as in a window of its own.
+	dragged := func(self id, cmd objc.SEL, info id) uint {
 		s := b().surfaceOf(self)
 		if s == nil {
 			return 0
 		}
+		if wv := s.webViewAtDrag(info); wv != nil {
+			// The page the pointer came in over from hears that it left,
+			// as a page of a window does when the pointer goes to another.
+			s.pageDragTo(wv, info, cmd == sel("draggingEntered:"))
+			// draggingEntered: and draggingUpdated: both answer an
+			// NSDragOperation, so the selector goes on as it stands.
+			if op := uint(objc.Send[uintptr](wv.web, cmd, uintptr(info))); op != 0 {
+				return op
+			}
+			// WebKit answers none while its page takes the drag (it asks
+			// the page's handlers during the drop, not here): the surface
+			// takes the drag on the page's behalf, or AppKit would send no
+			// drop to it.
+			return uint(send(info, "draggingSourceOperationMask"))
+		}
+		// The drag is over the content: a page it left hears of that, and
+		// the content takes the drag.
+		s.pageDragTo(nil, info, false)
 		return s.nativeDataOperation(info)
 	}
 	methods := []objc.MethodDef{
@@ -973,16 +1211,49 @@ func registerSurfaceClass() {
 		method("draggingUpdated:", dragged),
 		method("draggingExited:", func(self id, _ objc.SEL, info id) {
 			if s := b().surfaceOf(self); s != nil {
-				s.nativeDataEvent(info, platform.DataDragLeave)
+				s.dragExited(info)
 			}
 		}),
-		method("prepareForDragOperation:", func(self id, _ objc.SEL, info id) bool { return true }),
+		// The surface takes any drop itself (nativeDataEvent reads the
+		// pasteboard); a page's awaits the drop, on the web view.
+		method("prepareForDragOperation:", func(self id, _ objc.SEL, info id) bool {
+			s := b().surfaceOf(self)
+			if s == nil {
+				return true
+			}
+			if wv := s.webViewAtDrag(info); wv != nil {
+				// WebKit answers no here even where its page takes the
+				// drop, as a web view of a window answers no too: the page
+				// hears of the drag and takes the drop itself.
+				s.pageDragTo(wv, info, false)
+				objc.Send[bool](wv.web, objc.RegisterName("prepareForDragOperation:"), uintptr(info))
+				return true
+			}
+			return true
+		}),
 		method("performDragOperation:", func(self id, _ objc.SEL, info id) bool {
 			s := b().surfaceOf(self)
 			if s == nil {
 				return false
 			}
+			if wv := s.pageDrag; wv != nil {
+				// The page concludes its own drag once this returns
+				// (concludeDragOperation:), so its web view is kept until
+				// then; a drop the page refused is the surface's to forget.
+				s.pageDropped = s.pageDrop(wv, info)
+				if !s.pageDropped {
+					s.pageDrag, s.pageDropped = nil, false
+				}
+				return s.pageDropped
+			}
 			return s.nativeDataEvent(info, platform.DataDrop)
+		}),
+		method("concludeDragOperation:", func(self id, _ objc.SEL, info id) {
+			if s := b().surfaceOf(self); s != nil {
+				if wv := s.pageDragEnd(); wv != nil {
+					objc.Send[struct{}](wv.web, objc.RegisterName("concludeDragOperation:"), uintptr(info))
+				}
+			}
 		}),
 	}
 	classDef("MyGoSurfaceView", "NSView", []string{"NSTextInputClient"}, append(append(methods, accessViewMethods()...), []objc.MethodDef{
@@ -1063,7 +1334,9 @@ func registerSurfaceClass() {
 			// A closed window's view lives until its timer fires.
 			if s := b().surfaceOf(self); s != nil {
 				s.timing = false
-				s.frameNow(false)
+				// Uncapped, the content may leave the frame to draw
+				// once the renderer can (frameSoon).
+				s.frameNow(pacing.Uncapped)
 			}
 		}),
 		method("setFrameSize:", func(self id, cmd objc.SEL, size NSSize) {
@@ -1103,6 +1376,11 @@ func registerSurfaceClass() {
 		method("otherMouseUp:", mouse(platform.PointerUp, 2)),
 		method("otherMouseDragged:", mouse(platform.PointerMove, 2)),
 		method("mouseMoved:", mouse(platform.PointerMove, 0)),
+		method("tabletPoint:", func(self id, _ objc.SEL, ev id) {
+			if s := b().surfaceOf(self); s != nil {
+				s.tabletPoint(ev)
+			}
+		}),
 		method("mouseEntered:", func(self id, _ objc.SEL, ev id) {
 			if s := b().surfaceOf(self); s != nil {
 				s.inside = true
@@ -1162,18 +1440,32 @@ func registerSurfaceClass() {
 			text := s.input.Active && mods&(platform.ModSuper|platform.ModCtrl) == 0
 			ime := text && !s.input.NoInputMethod
 			// A key typed while the input method composes is the input
-			// method's alone, as Enter choosing a candidate or Escape
-			// giving the composition up, as GTK's and IMM32's filtering
-			// keeps them on Linux and Windows.
-			if !ime || !s.hasMarkedText() {
-				s.send(platform.SurfaceEvent{Kind: platform.KeyPressed, Key: eventKey(ev), PhysicalKey: physicalKey(ev), Mods: mods, Repeat: sendBool(ev, "isARepeat")})
+			// method's, as Enter choosing a candidate or Escape giving the
+			// composition up, as GTK's and IMM32's filtering keeps them on
+			// Linux and Windows, unless the input method passes it on
+			// (doCommandBySelector:).
+			key := platform.SurfaceEvent{Kind: platform.KeyPressed, Key: eventKey(ev), PhysicalKey: physicalKey(ev), Code: eventKeyCode(ev), Mods: mods, Repeat: sendBool(ev, "isARepeat")}
+			withheld := ime && s.hasMarkedText()
+			if !withheld {
+				s.send(key)
 			}
 			// Input methods see the key while a text input has the focus;
 			// they answer with insertText: or setMarkedText:.
-			if ime {
+			// A held key's repeats type it again where there is no text
+			// for press and hold's accents to replace, as a terminal's
+			// input, which takes text itself (no Client): the accents
+			// menu, holding the repeats back, would type nothing there.
+			if ime && s.input.Client == nil && sendBool(ev, "isARepeat") && !s.hasMarkedText() {
+				if t := typedChars(stringOf(send(ev, "characters"))); t != "" {
+					s.insertText(t, nsRange{Location: nsNotFound})
+				}
+			} else if ime {
 				s.keyDown = true
-				send(self, "interpretKeyEvents:", uintptr(nsArray(ev)))
-				s.keyDown = false
+				if withheld {
+					s.withheld = &key
+				}
+				interpretKeys(self, ev)
+				s.keyDown, s.withheld = false, nil
 				if s.refused {
 					s.refused = false
 					s.discardComposition()
@@ -1188,12 +1480,13 @@ func registerSurfaceClass() {
 		}),
 		method("keyUp:", func(self id, _ objc.SEL, ev id) {
 			if s := b().surfaceOf(self); s != nil {
-				s.send(platform.SurfaceEvent{Kind: platform.KeyReleased, Key: eventKey(ev), PhysicalKey: physicalKey(ev), Mods: eventMods(ev)})
+				s.send(platform.SurfaceEvent{Kind: platform.KeyReleased, Key: eventKey(ev), PhysicalKey: physicalKey(ev), Code: eventKeyCode(ev), Mods: eventMods(ev)})
 			}
 		}),
 		method("flagsChanged:", func(self id, _ objc.SEL, ev id) {
 			if s := b().surfaceOf(self); s != nil {
 				s.send(platform.SurfaceEvent{Kind: platform.ModifiersChanged, Mods: eventMods(ev)})
+				s.flagsChanged(ev)
 			}
 		}),
 		command("copy"), command("cut"), command("paste"), command("selectAll"), command("undo"), command("redo"), command("delete"),
@@ -1287,7 +1580,23 @@ func registerSurfaceClass() {
 			screen := msgRectToRect(s.w.win, sel("convertRectToScreen:"), inWindow)
 			return cgRect{X: screen.Origin.X, Y: screen.Origin.Y, W: screen.Size.Width, H: screen.Size.Height}
 		}),
-		method("doCommandBySelector:", func(self id, _ objc.SEL, cmd objc.SEL) {}),
+		// The input method passes on the key it was given (insertNewline:
+		// for Return, moveLeft: for the left arrow…), as the Korean one
+		// does once Return or an arrow committed the syllable it composed:
+		// the content gets the key it held back, as a text view acts on
+		// the command. Input methods that keep the key, as Return choosing
+		// a candidate in Japanese or Chinese, do not ask for its command,
+		// or still compose; a key the content got already, or a command
+		// outside keyDown:, sends nothing.
+		method("doCommandBySelector:", func(self id, _ objc.SEL, cmd objc.SEL) {
+			s := b().surfaceOf(self)
+			if s == nil || s.withheld == nil || s.hasMarkedText() {
+				return
+			}
+			key := *s.withheld
+			s.withheld = nil
+			s.send(key)
+		}),
 	}...))
 }
 

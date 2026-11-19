@@ -86,8 +86,9 @@ type morphGlyph struct {
 	alpha          float32
 }
 
-// morphCluster is a cluster of a layout's glyphs: its runes, and the pen
-// of its first glyph, its baseline and its size.
+// morphCluster is a cluster of a layout's glyphs: its runes, the pen and
+// baseline of its first glyph, as glyphsOf places that glyph (off the
+// line's for a mark that shaping moved), and its size.
 type morphCluster struct {
 	at, n int
 	x, y  float32
@@ -108,7 +109,7 @@ func clustersOf(l *text.Layout, cs []morphCluster, at []int32) ([]morphCluster, 
 				continue
 			}
 			at[g.Cluster] = int32(len(cs))
-			cs = append(cs, morphCluster{at: g.Cluster, n: min(g.Runes, len(l.Runes)-g.Cluster), x: g.X, y: line.Baseline, size: g.Size})
+			cs = append(cs, morphCluster{at: g.Cluster, n: min(g.Runes, len(l.Runes)-g.Cluster), x: g.X, y: g.Y, size: g.Size})
 		}
 	}
 	return cs, at
@@ -128,7 +129,7 @@ func glyphsOf(l *text.Layout, x, y float32, color Color, sp *spanPaint, gs []mor
 			if sp != nil {
 				c = sp.color(sp.at(g.Cluster), color)
 			}
-			mg := morphGlyph{font: g.Font, id: g.ID, fontSize: g.Size, size: g.Size, x: x + g.X, y: y + line.Baseline, color: c, alpha: 1}
+			mg := morphGlyph{font: g.Font, id: g.ID, fontSize: g.Size, size: g.Size, x: x + g.X, y: y + g.Y, color: c, alpha: 1}
 			// The glyphs of a cluster are next to each other, in visual
 			// order: clusters descend through right-to-left text.
 			if g.Runes > 0 && g.Cluster != seen && g.Cluster >= 0 && g.Cluster < len(l.Runes) {
@@ -308,7 +309,7 @@ func (pr *morphPairs) each(r *contentRec, bx, by, x, y, tx, ty float32, color Co
 				color = sp.color(sp.at(g.Cluster), color)
 			}
 			shade := text.ShadeOf(color.R, color.G, color.B)
-			gx, gy := x+g.X, y+line.Baseline
+			gx, gy := x+g.X, y+g.Y
 			ci := clusterOf(pr.curAt, g)
 			var runes []rune
 			if ci >= 0 && g.Cluster == pr.curC[ci].at && g.X == pr.curC[ci].x {
@@ -377,8 +378,10 @@ func (p *Painter) morph(e *node, r *contentRec, x, y float32, ts textStyle, span
 		tx, ty = pr.toX, pr.toY
 	}
 	// stroke, while the strokes of the glyphs paint under them all, is
-	// the width of the text's (TextStroke).
+	// the width of the text's (TextStroke), and shadow tells that the
+	// shadows they cast paint under those (TextShadow).
 	var stroke float32
+	var shadow bool
 	show := func(g text.Glyph, _ []rune, rx, ry, gx, gy, size float32, c Color, shade text.Shade, alpha float32) {
 		if alpha <= 0.001 || size <= 0 {
 			return
@@ -401,9 +404,12 @@ func (p *Painter) morph(e *node, r *contentRec, x, y float32, ts textStyle, span
 		// which renderers make gray while it is transformed; at another,
 		// gray.
 		var gi text.GlyphImage
-		if stroke > 0 {
+		switch {
+		case shadow:
+			gi, c = shadowGlyph(sys, g.Font, g.ID, s*q, at, shade, false, ts.shadow.blur/2*s*q), ts.shadow.color
+		case stroke > 0:
 			gi, c = strokeGlyph(sys, g.Font, g.ID, s*q, at, shade, p.opaque && q == 1, stroke*s*q), ts.strokeColor
-		} else {
+		default:
 			gi = sys.Glyph(g.Font, g.ID, s*q, at, shade, p.opaque && q == 1)
 		}
 		if !gi.OK {
@@ -418,10 +424,22 @@ func (p *Painter) morph(e *node, r *contentRec, x, y float32, ts textStyle, span
 		// Its origin goes to its pen, as far from it as text at rest has
 		// it, and it scales around it.
 		ox, oy := gx*s+origin-pen, gy*s+baseline-base
+		if shadow {
+			ox, oy = ox+ts.shadow.x*s, oy+ts.shadow.y*s
+		}
 		if q != 1 || size != 1 || abs32(ox-o) > 1e-3 || abs32(oy-baseline) > 1e-3 {
 			sg.Transform = scene.Translation(ox, oy).Mul(scene.Scaling(size/q, size/q)).Mul(scene.Translation(-o, -baseline))
 		}
 		p.s.Glyphs = append(p.s.Glyphs, sg)
+	}
+	if shadowGlyph != nil && ts.shadow.color.A > 0 {
+		shadow = true
+		start := int32(len(p.s.Glyphs))
+		pr.each(r, e.x, e.y, x, y, tx, ty, color, sp, k, show)
+		if end := int32(len(p.s.Glyphs)); end > start {
+			p.add(scene.Op{Kind: scene.OpGlyphs, Start: start, End: end})
+		}
+		shadow = false
 	}
 	if strokeGlyph != nil && ts.strokeWidth > 0 && ts.strokeColor.A > 0 {
 		stroke = ts.strokeWidth
@@ -442,7 +460,7 @@ func (p *Painter) morph(e *node, r *contentRec, x, y float32, ts textStyle, span
 // textLines paints the lines over the text of l, laid out from (x, y), in
 // color: those of its style, ts, and those of its spans, sp if not nil.
 func (p *Painter) textLines(l *text.Layout, x, y float32, color Color, ts textStyle, sp *spanPaint) {
-	deco := decoration{underline: ts.underline, wavy: ts.wavy, strike: ts.strike, solid: ts.solid, color: ts.decoColor, thick: ts.decoThick,
+	deco := decoration{underline: ts.underline, wavy: ts.wavy, dotted: ts.dotted, strike: ts.strike, solid: ts.solid, color: ts.decoColor, thick: ts.decoThick,
 		offset: ts.decoOffset, hasOffset: ts.set&setDecoOffset != 0}
 	if !deco.underline && !deco.strike && sp == nil {
 		return

@@ -3,6 +3,7 @@
 package mygo
 
 import (
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -518,6 +519,18 @@ func TestDocumentQuit(t *testing.T) {
 	answer("Don’t Save")
 	onMainValue(fb.QuitRequested)
 	<-quits
+
+	// The OS ends the session: kept right away, without asking or waiting,
+	// even with AskOnQuit and a listener before that tried to cancel.
+	a.Set("ask again")
+	asked = answer("Cancel")
+	e := &QuitEvent{SessionEnding: true}
+	e.PreventDefault()
+	before := a.backedUpAt()
+	onMain(func() { documentsBeforeQuit(e) })
+	if len(asked.all()) != 0 || a.backedUpAt() == before || docQuit.running {
+		t.Errorf("at the session's end: asked %q, backed up %v (was %v), waiting %v", asked.all(), a.backedUpAt(), before, docQuit.running)
+	}
 }
 
 func (b *docBase) backedUpAt() uint64 {
@@ -592,6 +605,28 @@ func TestDocumentFollowsReplacedRename(t *testing.T) {
 	})
 	if d.State().Deleted {
 		t.Error("deleted")
+	}
+}
+
+// TestDocumentWatchStartFollowsRename renames the file before its watch
+// starts, which then can't: the document follows it all the same.
+func TestDocumentWatchStartFollowsRename(t *testing.T) {
+	ds := testDocs(t, DocumentsOptions[string]{Autosave: AutosaveOff})
+	path := writeTemp(t, "start.txt", "one")
+	path, _ = filepath.EvalSymlinks(path)
+	d, _ := ds.Open(path)
+	renamed := filepath.Join(filepath.Dir(path), "started.txt")
+	if err := os.Rename(path, renamed); err != nil {
+		t.Fatal(err)
+	}
+	watchDocumentFile(context.Background(), path)
+	// The recent documents too: the move writes them in the user data
+	// directory after the path, which the test's cleanup removes.
+	waitFor(t, "the document to follow the rename", func() bool {
+		return d.Path() == renamed && slices.Contains(App.RecentDocuments(), renamed)
+	})
+	if d.State().Deleted {
+		t.Error("the document is deleted")
 	}
 }
 

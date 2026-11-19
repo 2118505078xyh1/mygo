@@ -433,9 +433,11 @@ element. An element asks for each of its timelines once per build, and the
 While the desktop asks for less motion, a timeline that would play is at
 once where it would come to rest, every tween at its `To`, or at its `From`
 when it plays back to its start, as values, poses and `Keyframes` are, and
-it asks for no frame. What the view does with the playhead itself still
-works, as a drag still moves a `Draggable` element: `Seek` and `Progress`
-put it where a scrubber asks, and `Paused` holds it there.
+it asks for no frame, unless its `NonMotion` says it only fades (see
+[Less motion](#less-motion-and-frames)). What the view does with the
+playhead itself still works, as a drag still moves a `Draggable` element:
+`Seek` and `Progress` put it where a scrubber asks, and `Paused` holds it
+there.
 `DisableAnimations` does not change a timeline, which plays on its own as
 `Keyframes` do; `Seek` jumps it. A timeline draws frames only while it
 plays, timed by `c.Now()`.
@@ -444,7 +446,10 @@ plays, timed by `c.Now()`.
 
 `InView()` reports whether some of an element showed in the frame before,
 within the scroll containers around it, to bring it in as it scrolls into
-view. A `ScrollState` (see [Scrolling](scroll.md)) gives how far its
+view. When what it answers from changes, as a scroll brings the element in,
+MyGo builds another frame, so the view reads the new answer without waiting
+for the next input; `InViewMargin` and `InViewAmount` do the same, and an
+element that reads none of them costs no frame. A `ScrollState` (see [Scrolling](scroll.md)) gives how far its
 container scrolled, for effects that follow the scrolling:
 
 ```go
@@ -478,6 +483,21 @@ clip it as they do, without the margin. `InViewMargin()`, with no margin,
 is `InView()`. A `List` or `GridView` builds only the rows near its edges,
 two beyond each, so in one the margin reaches no further than the rows it
 builds.
+
+`InViewAmount(amount, margin...)` waits for that share of the element's
+area, from 0 to 1, to show, as IntersectionObserver's `threshold` and
+Motion's `amount` do: an impression counts once half of a card shows,
+not as it peeks in at the bottom of a list, and an animation starts at a
+fifth of it. `1` waits for all of it, `0` is `InViewMargin`; the margin
+grows the window and the scroll containers as `InViewMargin`'s does. Its
+area is that of its box as transforms move it:
+
+```go
+card := ui.Column(c).Key(ad.ID)
+if card.InViewAmount(0.5) {
+	app.counted(ad.ID)
+}
+```
 
 `ScrollState.ScrollTo(x, y, animation)` scrolls a container smoothly, and
 `ScrollIntoView` with an `Animation` in its options the containers around
@@ -529,6 +549,20 @@ last value. What changes without moving still changes smoothly: colors
 [transitions](transitions.md)' colors and fades. `Loop` goes on, as the
 system's spinners do.
 
+What a value moves is the view's to say. One that moves nothing, as an
+opacity, a blur or a crossfade the view drives itself, says so with
+`NonMotion` on its `Animation`, `KeyframeOptions` or `TimelineOptions`,
+and then animates with less motion too, as an element's own fades do:
+
+```go
+op := e.AnimateTo("fade", target, ui.Animation{Duration: 200 * time.Millisecond, NonMotion: true})
+ui.Image(c, first).Opacity(1 - op)
+ui.Image(c, second).Opacity(op)
+```
+
+Leave it off for a position, a size, a scale or a scroll, and give what
+moves a timeline of its own beside its fades', which goes to rest at once.
+
 Animations draw frames only while something moves, at the display's rate,
 and none while the window is out of sight (below). Frames moving values
 the view reads run the view; poses, content transitions, and drawings that
@@ -538,16 +572,22 @@ animate from their `Draw` only paint.
 
 While nothing of a window shows (on macOS: hidden, minimized, on another
 Space, or entirely covered by other windows; in a browser: a tab in the
-background), MyGo draws no frames for it, as browsers draw nothing for
-pages out of sight and as Apple asks of Mac apps. The view does not run,
+background; on Windows, and on Linux under X11: minimized), MyGo draws no
+frames for it, as browsers draw nothing for pages out of sight and as
+Apple asks of Mac apps. The view does not run,
 `Draw` is not called, and the frames `After` and `Painter.After` ask for
 wait. As soon as some of the window shows, it draws once, with everything
 that changed meanwhile; until then the screen shows its last frame, for
 about a refresh. A frame still builds after input (keys typed into a key
 window another app's window covers), when assistive technology turns on,
 and for `Window.CapturePage`, so that a capture shows the window as it is
-now. Windows and Linux do not tell MyGo when a window is out of sight, so
-there it draws as it always did.
+now. Windows and X11 tell MyGo of a window minimized and of no more, and
+Wayland of nothing, so a window that others cover, or one on another
+desktop, draws there as it always did. On macOS a window out of sight
+also gives back the GPU's memory of its frames half a second after its
+last, keeping only the frame it shows, which the Dock, Mission Control
+and captures of the window show: a window in a background tab costs one
+frame of memory, as large as the window, rather than two or three.
 
 What this means for motion:
 

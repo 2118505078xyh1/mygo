@@ -111,6 +111,9 @@ func contentMenu(m *platform.Menu, chosen func(int)) []*MenuItem {
 	items := make([]*MenuItem, 0, len(m.Items))
 	for _, p := range m.Items {
 		it := &MenuItem{Label: p.Label, Accelerator: p.Accelerator, Disabled: !p.Enabled, Hidden: !p.Visible, Checked: p.Checked}
+		if p.Icon != nil {
+			it.Icon = &MenuIcon{p.Icon}
+		}
 		switch p.Type {
 		case platform.MenuItemSeparator:
 			it.Type = MenuItemSeparator
@@ -237,7 +240,15 @@ func (h *windowHandler) SurfaceEvent(ev platform.SurfaceEvent) bool {
 	if ev.Kind == platform.SurfaceFrame {
 		framing := h.w.framing
 		h.w.framing = true
-		defer func() { h.w.framing = framing }()
+		defer func() {
+			h.w.framing = framing
+			if !framing && h.w.showLater {
+				// The frame waited handling events (Secrets.Get), where
+				// the settleShow NewWindow posted ran and left the
+				// window to show: it shows on the next turn.
+				postMain(h.w.settleShow)
+			}
+		}()
 	}
 	resolveDataDrag(ev.Drag)
 	c := h.w.conn

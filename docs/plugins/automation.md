@@ -47,6 +47,30 @@ A socket left at the path by an app that ended without closing it is
 replaced; one that another app listens on is not, nor a file that is no
 socket. The app removes its socket when it quits.
 
+
+## On phones
+
+The same protocol drives an app in a simulator or on a device, so that a test
+written once runs on all of them. Release builds leave the plugin out, so the
+import needs no tag.
+
+The iOS simulator shares the Mac's files, and takes the variable through `simctl`:
+
+```sh
+SIMCTL_CHILD_MYGO_AUTOMATION=/tmp/app.sock xcrun simctl launch booted com.example.app
+```
+
+An app's files on Android are out of adb's reach: name a socket in the abstract
+namespace, with `@`, and forward a port to it. The debug build takes the
+environment with its launch:
+
+```sh
+adb shell "am start -n com.example.app/dev.mygo.MyGoActivity --es mygo.env 'MYGO_AUTOMATION=@app'"
+adb forward tcp:9000 localabstract:app
+```
+
+A device on a cable takes a port, `MYGO_AUTOMATION=tcp::9000` through `devicectl device process launch --environment-variables`, at the address of its tunnel (`devicectl device info details`). Anyone on the phone's networks can reach that port, so use it where you trust them. Input events take `"touch": true` to act as a finger's.
+
 ## The protocol
 
 A client connects to the socket and writes requests, one JSON object per
@@ -123,9 +147,22 @@ A node has its `id`, the `parent`'s ID unless it is at the top, its
 `role`, and those of `key`, `label`, `value`, `placeholder`,
 `description`, `bounds`, `states`, `actions`, `min`, `max`, `now` and
 `step` (of sliders, progress bars, meters and steppers), `selection` (of
-text fields, in runes), `level`, `posInSet`, `setSize` and `current`
+text fields, in runes), `level`, `posInSet`, `setSize`, `rowCount`,
+`colCount`, `rowIndex` and `colIndex` (the size of a table or a grid,
+and the place of a row or a cell in it from 1, as the app gave them:
+ARIA's `aria-rowcount` and the like), `rowSpan` and `colSpan` (how many
+rows and columns a cell covers, when more than one: `aria-rowspan` and
+`aria-colspan`), `current`
 (what it is the current one of, as ARIA's `aria-current`: `true`,
-`page`, `step`, `location`, `date` or `time`) that it has.
+`page`, `step`, `location`, `date` or `time`), `autoComplete` (what
+a text field's or a combo box's suggestions complete, as ARIA's
+`aria-autocomplete`: `inline`, `list` or `both`), `roleDescription` (as
+`aria-roledescription`), `hasPopup` (the kind of popup it opens, as
+`aria-haspopup`: `menu`, `listbox`, `tree`, `grid` or `dialog`),
+`controls` (the IDs of the elements it controls, as `aria-controls`),
+`describedBy` (the IDs of the elements describing it, as
+`aria-describedby`) and `errorMessage` (those holding its error while it
+is `invalid`, as `aria-errormessage`) that it has.
 IDs are strings of digits: they are 64-bit, which JavaScript's numbers
 would round. `keyShortcuts` is the keys that press or focus the element,
 as ARIA's `aria-keyshortcuts`, written as the platform's menus write
@@ -153,11 +190,14 @@ a column that lays others out has no node, keyed or not. Roles are
 `listItem`, `menuButton`, `toolbar`, `radioGroup`, `toggleButton`,
 `comboBox`, `disclosure`, `meter`, `stepper`, `colorWell`,
 `alertDialog`, `menu`, `menuBar`, `menuItem`, `menuItemCheckBox`,
-`menuItemRadio`, `heading` and `navigation`. States are `focusable`, `disabled`,
+`menuItemRadio`, `heading`, `region`, `log`, `timer`, `alert`,
+`separator`, `rowHeader`, `search`, `article`, `navigation`, `grid`,
+`treeGrid`, `deletion`, `insertion`, `tabPanel`, `main`, `banner`, `contentInfo` and
+`complementary`. States are `focusable`, `disabled`,
 `checked`, `mixed`, `selected`, `expanded`, `multiline`, `password`,
 `readOnly`, `selectable`, `offscreen`, `multiselectable`, `segment`,
 `search`, `invalid`, `sortAscending`, `sortDescending`, `expandable`,
-`vertical` and `busy`.
+`vertical`, `busy`, `sortOther` and `horizontal`.
 
 A web view in native UI shows as a node marked `webView`, without the
 elements of its page. A window showing a web page has no tree: `tree`
@@ -265,6 +305,17 @@ never settles, as an indicator that keeps moving, never answers: give
 ```json
 {"id": 8, "method": "idle", "params": {"window": 1, "timeout": 5000}}
 ```
+
+### Windows out of sight
+
+A window none of which shows, as a hidden or minimized one, one that
+other windows cover, or any while the screen is locked, holds its frames
+until it shows, and its surface may draw none before then: macOS draws
+none for a hidden window, nor for any window while the screen is locked.
+There, requests build the frame the window waits for themselves: `act`
+and `input` take effect at once, as a press does in the frame that
+builds, and `tree`, `capture` and `idle` tell what the window shows now,
+with `idle` waiting for nothing the window would draw once it shows.
 
 ## A client
 

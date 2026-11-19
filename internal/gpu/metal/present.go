@@ -116,6 +116,13 @@ func (p *presenter) ready(wake func()) bool {
 	return false
 }
 
+// busy reports whether a drawable is being fetched.
+func (p *presenter) busy() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.fetching
+}
+
 // wait waits for a fetch in flight.
 func (p *presenter) wait() {
 	p.mu.Lock()
@@ -256,6 +263,7 @@ func (r *Renderer) finishPending(prefetch bool) error {
 	release(&p.cb)
 	r.lastRender = time.Now()
 	r.armTrim()
+	r.sweepIfDue()
 	return nil
 }
 

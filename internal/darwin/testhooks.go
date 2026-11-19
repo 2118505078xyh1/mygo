@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin && !ios
 
 package darwin
 
@@ -50,6 +50,23 @@ func TestMenuItemEnabled(path ...string) (enabled bool, err error) {
 	return enabled, err
 }
 
+// TestMenuItemSubtitle returns the title and the subtitle of an item of the
+// application menu, found by its title as TestPerformMenuItem finds it.
+func TestMenuItemSubtitle(path ...string) (title, subtitle string, err error) {
+	withPool(func() {
+		var menu id
+		var index int
+		if menu, index, err = menuItemAt(path); err == nil {
+			item := send(menu, "itemAtIndex:", uintptr(index))
+			title = goString(send(item, "title"))
+			if respondsTo(item, "subtitle") {
+				subtitle = goString(send(item, "subtitle"))
+			}
+		}
+	})
+	return title, subtitle, err
+}
+
 // menuItemAt finds an item of the application menu by the titles along
 // its path, and returns its menu and its index there.
 func menuItemAt(path []string) (menu id, index int, err error) {
@@ -92,6 +109,34 @@ func TestPerformKeyEquivalent(key string, shift bool) bool {
 func TestOnScreen(handle uintptr) bool {
 	const occlusionStateVisible = 1 << 1
 	return sendInt(id(handle), "occlusionState")&occlusionStateVisible != 0
+}
+
+// TestOrderedIn reports whether a window is ordered in, as AppKit has it
+// at once, before the window server shows it (TestOnScreen).
+func TestOrderedIn(handle uintptr) bool {
+	return sendBool(id(handle), "isVisible")
+}
+
+// TestMetalDrawableSize returns the size of the drawables of the
+// CAMetalLayer the GPU renderer draws a window's surface into, a pixel
+// while it gave them back, and whether it has one.
+func TestMetalDrawableSize(handle uintptr) (width, height float64, ok bool) {
+	w := theBackend.byNSWindow[id(handle)]
+	if w == nil || w.surface == nil {
+		return 0, 0, false
+	}
+	l := w.surface.metalLayer()
+	if l == 0 {
+		return 0, 0, false
+	}
+	s := msgSize(l, sel("drawableSize"))
+	return s.Width, s.Height, true
+}
+
+// TestPerformClose closes a window as its close button does, which asks
+// the delegate first (performClose:).
+func TestPerformClose(handle uintptr) {
+	send(id(handle), "performClose:", 0)
 }
 
 // TestWindowOrder returns the app's windows on screen, panels too, front
@@ -172,6 +217,20 @@ func TestAppPress(handle uintptr, x, y float64, down bool) {
 // bar's items too. It reports false where the process may not post events
 // (Accessibility).
 func TestPostMouse(x, y float64, down bool) bool {
+	typ := uint32(2) // kCGEventLeftMouseUp
+	if down {
+		typ = 1 // kCGEventLeftMouseDown
+	}
+	return postMouse(x, y, typ)
+}
+
+// TestPostMouseMove moves the pointer to (x, y) on screen, as
+// TestPostMouse presses.
+func TestPostMouseMove(x, y float64) bool {
+	return postMouse(x, y, 5) // kCGEventMouseMoved
+}
+
+func postMouse(x, y float64, typ uint32) bool {
 	testPostOnce.Do(func() {
 		purego.RegisterLibFunc(&cgPreflightPostEventAccess, libCG, "CGPreflightPostEventAccess")
 		purego.RegisterLibFunc(&cgEventCreateMouseEvent, libCG, "CGEventCreateMouseEvent")
@@ -179,10 +238,6 @@ func TestPostMouse(x, y float64, down bool) bool {
 	})
 	if !cgPreflightPostEventAccess() {
 		return false
-	}
-	typ := uint32(2) // kCGEventLeftMouseUp
-	if down {
-		typ = 1 // kCGEventLeftMouseDown
 	}
 	ev := cgEventCreateMouseEvent(0, typ, NSPoint{x, y}, 0) // kCGMouseButtonLeft
 	if ev == 0 {
@@ -603,6 +658,55 @@ func TestSetWindowAppearance(handle uintptr, dark bool) {
 	})
 }
 
+// TestPopoverAppearance returns the explicit popover chrome appearance and
+// the effective appearances of its window/content, including the arrow's host.
+func TestPopoverAppearance(handle uintptr) (chrome, window, content string) {
+	w := theBackend.byNSWindow[id(handle)]
+	if w == nil || w.popover == 0 {
+		return
+	}
+	name := func(object id, property string) string {
+		a := send(object, property)
+		if a == 0 {
+			return ""
+		}
+		return goString(send(a, "bestMatchFromAppearancesWithNames:", uintptr(nsArray(nsString("NSAppearanceNameAqua"), nsString("NSAppearanceNameDarkAqua")))))
+	}
+	return name(w.popover, "appearance"), name(w.win, "effectiveAppearance"), name(w.view, "effectiveAppearance")
+}
+
+// TestPopover returns the NSPopover a popover flyout shows in, 0 for none.
+func TestPopover(handle uintptr) uintptr {
+	if w := theBackend.byNSWindow[id(handle)]; w != nil {
+		return uintptr(w.popover)
+	}
+	return 0
+}
+
+// TestPopoverClosing reports whether a closed flyout gave the NSPopover
+// back while it was still closing, and it has not finished (givePopover).
+func TestPopoverClosing(popover uintptr) bool {
+	return theBackend.closingPopovers[id(popover)]
+}
+
+// TestSetPopoverAnchorAppearance models a status item's contrast appearance,
+// which can differ from the application's own theme over desktop wallpaper.
+func TestSetPopoverAnchorAppearance(handle uintptr, dark bool) {
+	w := theBackend.byNSWindow[id(handle)]
+	if w == nil {
+		return
+	}
+	view, _, _ := w.popoverAnchor()
+	if view == 0 {
+		return
+	}
+	name := "NSAppearanceNameAqua"
+	if dark {
+		name = "NSAppearanceNameDarkAqua"
+	}
+	send(view, "setAppearance:", uintptr(send(class("NSAppearance"), "appearanceNamed:", uintptr(nsString(name)))))
+}
+
 // TestWebViewAttached reports whether a window's web view is in its view
 // hierarchy.
 func TestWebViewAttached(handle uintptr) bool {
@@ -868,6 +972,23 @@ func TestRoundedBacking(handle uintptr) (opaque bool, alpha, red float64) {
 		}
 	})
 	return opaque, alpha, red
+}
+
+// TestWindowBacking reports whether a window is opaque, and the alpha of
+// its background color, in sRGB.
+func TestWindowBacking(handle uintptr) (opaque bool, alpha float64) {
+	w := theBackend.byNSWindow[id(handle)]
+	if w == nil {
+		return false, 0
+	}
+	opaque = sendBool(w.win, "isOpaque")
+	withPool(func() {
+		c := send(send(w.win, "backgroundColor"), "colorUsingColorSpace:", uintptr(send(class("NSColorSpace"), "sRGBColorSpace")))
+		if c != 0 {
+			alpha = msgFloat(c, sel("alphaComponent"))
+		}
+	})
+	return opaque, alpha
 }
 
 // TestDockInspector opens the web inspector of a window docked to it, and
@@ -1171,6 +1292,34 @@ func TestComposeOver(handle uintptr, text string, caret int, commit bool, from, 
 	return true
 }
 
+// TestKeyComposing presses the key of virtual key code code, typing chars,
+// in a window showing native UI, with the test standing in for the input
+// method that interprets it: the input method inserts commit, unless it
+// is empty, then asks for the key's command (doCommandBySelector:), unless
+// command is empty. The Korean input method takes Return so while it
+// composes: it commits the syllable and asks for insertNewline:. The
+// Japanese one commits the candidate and asks for nothing. It reports
+// false for a window showing a web page.
+func TestKeyComposing(handle uintptr, code uint16, chars, commit, command string) bool {
+	w := theBackend.byNSWindow[id(handle)]
+	if w == nil || w.surface == nil {
+		return false
+	}
+	loadTestInput()
+	interpret := interpretKeys
+	defer func() { interpretKeys = interpret }()
+	interpretKeys = func(view, ev id) {
+		if commit != "" {
+			msgInsertText(view, sel("insertText:replacementRange:"), nsString(commit), nsRange{Location: nsNotFound})
+		}
+		if command != "" {
+			send(view, "doCommandBySelector:", uintptr(sel(command)))
+		}
+	}
+	sendKeyToWindow(w, code, chars, false)
+	return true
+}
+
 // TestInputClient returns what a window's surface tells input methods: the
 // selected range and the whole text of their document.
 func TestInputClient(handle uintptr) (selected [2]int, document string) {
@@ -1207,6 +1356,13 @@ var (
 // the surface took the files over that point and whether it took the
 // drop.
 func TestDropFiles(handle uintptr, x, y float64, paths []string) (over, dropped bool) {
+	return TestDropFilesFrom(handle, x, y, x, y, paths)
+}
+
+// TestDropFilesFrom is TestDropFiles for a drag that came in over (overX,
+// overY) and was let go at (x, y), as a drag over a page and dropped
+// beside it, on the content.
+func TestDropFilesFrom(handle uintptr, overX, overY, x, y float64, paths []string) (over, dropped bool) {
 	w := theBackend.byNSWindow[id(handle)]
 	if w == nil || w.surface == nil {
 		return false, false
@@ -1216,6 +1372,24 @@ func TestDropFiles(handle uintptr, x, y float64, paths []string) (over, dropped 
 			method("draggingLocation", func(self id, _ objc.SEL) NSPoint { return testDragAt }),
 			method("draggingPasteboard", func(self id, _ objc.SEL) id { return testDragPB }),
 			method("draggingSourceOperationMask", func(self id, _ objc.SEL) uint { return testDragMask }),
+			// A drag to a page goes on to WebKit, which asks the rest of
+			// NSDraggingInfo (applicationFlagsForDrag): a drag of neither
+			// its pages nor its web views is another application's.
+			method("draggingSource", func(self id, _ objc.SEL) id { return 0 }),
+			method("draggingSequenceNumber", func(self id, _ objc.SEL) int { return 0 }),
+			method("draggingFormation", func(self id, _ objc.SEL) int { return 0 }),
+			method("setDraggingFormation:", func(self id, _ objc.SEL, n int) {}),
+			method("animatesToDestination", func(self id, _ objc.SEL) bool { return false }),
+			method("setAnimatesToDestination:", func(self id, _ objc.SEL, b bool) {}),
+			method("numberOfValidItemsForDrop", func(self id, _ objc.SEL) int { return 1 }),
+			method("setNumberOfValidItemsForDrop:", func(self id, _ objc.SEL, n int) {}),
+			method("springLoadingHighlight", func(self id, _ objc.SEL) int { return 0 }),
+			method("draggingImageComponents", func(self id, _ objc.SEL) id { return 0 }),
+			// WebKit asks this from draggingEntered:
+			// (_promisedFileMIMETypes:, on newer systems), and a
+			// dragging info without it aborts the test process.
+			method("enumerateDraggingItemsWithOptions:forView:classes:searchOptions:usingBlock:",
+				func(self id, _ objc.SEL, options uint, view, classes, search id, block uintptr) {}),
 		})
 		testDragInfo = send(send(class("MyGoTestDraggingInfo"), "alloc"), "init")
 		testDragPB = retain(send(class("NSPasteboard"), "pasteboardWithUniqueName"))
@@ -1235,7 +1409,9 @@ func TestDropFiles(handle uintptr, x, y float64, paths []string) (over, dropped 
 		}
 		send(testDragPB, "writeObjects:", uintptr(nsArray(urls...)))
 		v := w.surface.view
+		testDragAt = NSPoint{overX, content.Size.Height - overY}
 		over = send(v, "draggingEntered:", uintptr(testDragInfo)) != 0
+		testDragAt = NSPoint{x, content.Size.Height - y}
 		over = send(v, "draggingUpdated:", uintptr(testDragInfo)) != 0 && over
 		if !over {
 			send(v, "draggingExited:", uintptr(testDragInfo))
@@ -1287,7 +1463,10 @@ type TestAccessNode struct {
 	Focused  bool
 	Depth    int
 	Children int
-	obj      id
+	// Index is a row's place among its table's rows, from 0, and
+	// RowCount how many rows a table has, through the newer API.
+	Index, RowCount int
+	obj             id
 }
 
 // TestAccessibility reads the elements of a window showing native UI as
@@ -1311,6 +1490,10 @@ func TestAccessibility(handle uintptr) []TestAccessNode {
 					Depth:    depth,
 					Children: len(kids),
 					obj:      obj,
+				}
+				// Ours, not a page's elements, which may not answer them.
+				if theBackend.byAccess[obj] != nil {
+					n.Index, n.RowCount = sendInt(obj, "accessibilityIndex"), sendInt(obj, "accessibilityRowCount")
 				}
 				if v := send(obj, "accessibilityValue"); v != 0 {
 					n.Value = goString(send(v, "description"))
@@ -1700,6 +1883,15 @@ func TestWindowPixels(handle uintptr) (img *image.RGBA, ok bool) {
 		copy(img.Pix[row*img.Stride:], full.Pix[full.PixOffset(r.Min.X, r.Min.Y+row):full.PixOffset(r.Max.X, r.Min.Y+row)])
 	}
 	return img, true
+}
+
+// TestPauseFrames has the surface of a window's native UI take its last
+// frame for one long past, as on a runner slow enough that a frame asked
+// for comes after a pause (RequestFrame), whatever the machine's speed.
+func TestPauseFrames(handle uintptr) {
+	if w := theBackend.byNSWindow[id(handle)]; w != nil && w.surface != nil {
+		w.surface.lastFrame = time.Time{}
+	}
 }
 
 // TestDrawablesTrimmed reports whether the GPU renderer of a window's

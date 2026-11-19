@@ -17,12 +17,14 @@ type inspector struct {
 }
 
 func (in *inspector) contentWidth(w float32) float32                                { return w }
+func (in *inspector) contentHeight(w, h float32) float32                            { return h }
 func (in *inspector) lap(int)                                                       {}
 func (in *inspector) repainted(time.Duration)                                       {}
 func (in *inspector) noteSource()                                                   {}
 func (in *inspector) noteKey(uint64, any)                                           {}
 func (in *inspector) pointer(*engine, platform.SurfaceEvent, float32, float32) bool { return false }
 func (in *inspector) applyEdits(*node)                                              {}
+func (in *inspector) holds(*engine, uint64) bool                                    { return false }
 
 // inspectorBuilt keeps out of the layout what an empty function would still
 // cost it: gridLayout's frame and code grow by the arguments of a call that

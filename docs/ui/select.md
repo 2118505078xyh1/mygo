@@ -46,6 +46,21 @@ sel.Popup(func(panel ui.Element) {
 })
 ```
 
+As `ui.Select`'s, the popup is no taller than the room the window has: put
+a long list of options in a scroll container that shrinks, which then
+scrolls inside the window:
+
+```go
+sel.Popup(func(panel ui.Element) {
+	panel.Margin(4, 0, 0, 0).Padding(4).MaxHeight(256)
+	ui.Scroll(c).Shrink(1).Children(func() {
+		for _, opt := range options {
+			sel.Item(opt).Height(32).Padding(0, 10).Children(func() { ui.Text(c, opt) })
+		}
+	})
+})
+```
+
 `SetOpen` opens and closes the popup, as typing on the closed trigger may
 open it, highlighting the option typed, or Tab moving on close it; the
 popup opens with the highlight on the choice, which `Highlight` then
@@ -101,5 +116,9 @@ See [custom widgets](custom-widgets.md).
 ## Accessibility
 
 Assistive technology sees a pop-up button whose value is the choice, named
-by its `Label`, and, while it is open, its options, following the one the
-arrows are on.
+by its `Label`, and, while it is open, a list box of its options
+(`ui.RoleListBox`, `ui.RoleOption`), each saying which of how many it is.
+As in a native select's popup, the option the arrows or the pointer are on
+is the one selected, which the focus follows while the select keeps it;
+assistive technology focusing an option highlights it, as the arrows do,
+and pressing one chooses it, as a click does.

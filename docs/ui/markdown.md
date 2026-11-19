@@ -80,6 +80,35 @@ desktop's Reduce Motion. Text fades by its color and the rest of blocks
 paint only: nothing is laid out again for it. What is still to reveal
 when the message switches to `View` keeps coming in.
 
+### Once a reply has shown
+
+The last bytes of a reply arrive before its last words show: the pace
+is still catching up, and they still fade in. `Revealed`, given the
+element `View` or `Stream` returned, reports whether it shows all of its
+text, done fading in, so that a chat shows a reply's time and actions
+then, not ahead of words still coming in:
+
+```go
+var md ui.Element
+if m.Done {
+	md = markdown.View(c, m.Text, &app.md)
+} else {
+	md = markdown.Stream(c, m.Text, &app.md)
+}
+if m.Done && markdown.Revealed(md) {
+	ui.Text(c, m.Time).TextColor(c.Theme().TextMuted)
+}
+```
+
+It tells what the frame shows: read it after the view, and build what it
+decides below it. The view asks for frames while it reveals and fades,
+so the time shows on its own once the fade ends. Text that shows at once
+(`AtOnce`, a `View` of text no `Stream` left to reveal) is revealed in
+its first frame, and without a fade (a negative `Fade`, Reduce Motion)
+once its last word shows. More text makes it false again. Of a `Stream`
+it tells only that what came so far shows, so check that the reply is
+complete too, as `m.Done` above.
+
 ## A chat
 
 Show each message as a row of a [list](list.md) that follows its end:
@@ -168,6 +197,30 @@ app.md.OnLink = func(url string) {
 }
 ```
 
+`AnchorBlock` finds the block an anchor names, for `Anchor` and for the
+links to `#an-anchor` the view follows itself: given the view's document
+(see [the parser](#the-parser)) and the anchor without its `#`, it
+returns the block's index, or -1 to look for the heading of that slug,
+as without it. A notes app goes to a block by its ID, as Obsidian's
+`[[note#^block-id]]` goes to the paragraph ending in `^block-id`:
+
+```go
+app.md.AnchorBlock = func(d *parser.Document, name string) int {
+	if !strings.HasPrefix(name, "^") {
+		return -1 // a heading's slug
+	}
+	for i := 1; i < d.Len(); i++ {
+		if d.Block(i).Kind == parser.Paragraph && strings.HasSuffix(strings.TrimSpace(d.Lines(i)), " "+name) {
+			return i
+		}
+	}
+	return -1
+}
+```
+
+A list's item scrolls into view as its row, and a table's row or cell as
+the table. The document is the view's: read it, never change it.
+
 `LinkIcon` puts an icon at the start of a link's text, from its
 destination and the size of the text around it: a box as `InlineMath`
 makes, which clicks as the link and stays on the line of its first
@@ -198,6 +251,35 @@ as they are, at most as wide as the view.
 ```go
 app.md.LoadImage = markdown.FileImages(filepath.Dir(app.path))
 ```
+
+## Task lists
+
+The items of task lists, `- [ ]` and `- [x]`, show check boxes, which
+only show whether their tasks are done. `OnTask` makes them controls of
+the app's, as in a notes app that ticks a task off in the note's file: a
+click on a box, or Space or Enter while it has the focus, calls it with
+the line of the task in the view's source, from 1, and the state asked
+for. The box keeps showing what the source says, so the app writes the
+change and gives the view its new text:
+
+```go
+app.md.OnTask = func(line int, checked bool) {
+	lines := strings.SplitAfter(app.note, "\n")
+	mark := "[ ]"
+	if checked {
+		mark = "[x]"
+	}
+	l := lines[line-1]
+	i := strings.Index(l, "[") // the item's check box, after its marker
+	lines[line-1] = l[:i] + mark + l[i+3:]
+	app.note = strings.Join(lines, "")
+	app.save()
+}
+```
+
+The lines are those of the Markdown the view was given: a view built in
+a block of another, as of the Markdown in a code block, adds the block's
+line to them ([`SourceLine`](#code)).
 
 ## Code
 
@@ -230,6 +312,22 @@ app.md.CodeBlock = func(c *ui.Context, b *markdown.CodeBlockView) {
 		b.Body(c)       // the highlighted, selectable code
 		b.CopyButton(c) // the copy button
 	})
+}
+```
+
+`SourceLine` is the line of the view's source a block starts on, from 1:
+its opening fence, or indented code's first line. Line k of a fenced
+block's code is line `SourceLine()+k` of the source, so a block built as
+a view of the Markdown in it gives that view's tasks to the outer view's
+`OnTask` at their lines in the source:
+
+```go
+app.md.Code = map[string]func(*ui.Context, *markdown.CodeBlockView){
+	"tasks": func(c *ui.Context, b *markdown.CodeBlockView) {
+		start := b.SourceLine()
+		app.inner.OnTask = func(line int, checked bool) { app.md.OnTask(start+line, checked) }
+		markdown.View(c, b.Code(), &app.inner)
+	},
 }
 ```
 
@@ -316,7 +414,9 @@ Headings are headings of their level, lists and their items lists and
 list items, links links, tables tables of rows, column headers and
 cells, task items check boxes, checked or not, images images named by
 their descriptions, and code blocks groups named by their language,
-with a Copy code button.
+with a Copy code button. A task's check box is read-only, or, with
+`OnTask`, named by the task's text, takes the focus, and asks for the
+other state when assistive technology presses it, as a click does.
 
 ## The parser
 

@@ -362,3 +362,113 @@ func TestGridReorder(t *testing.T) {
 		t.Errorf("moves %v", fmt.Sprint(moves))
 	}
 }
+
+// A value let go over no element taking it, as past the window's edge,
+// tells its source where, once; one given up with Escape does not.
+func TestDragMissed(t *testing.T) {
+	var missed []Point
+	tt := coreNewTester(func(c *context) {
+		coreColumn(c).Gap(20).Padding(20).Children(func() {
+			src := coreBox(c).Size(100, 40).Label("Source").Drag("hello")
+			if at, ok := src.DragMissed(); ok {
+				missed = append(missed, at)
+			}
+			if _, ok := coreDrop[string](coreBox(c).Size(200, 100).Label("Target")); ok {
+				t.Error("the target took a value let go elsewhere")
+			}
+		})
+	}, 400, 400)
+	src, _ := tt.Find("Source")
+	drag(tt, src.X+10, src.Y+10, 450, -30)
+	tt.Frame()
+	if !slices.Equal(missed, []Point{{450, -30}}) {
+		t.Fatalf("let go past the edge: missed %v", missed)
+	}
+	missed = nil
+	tt.Press(src.X+10, src.Y+10)
+	tt.Move(src.X+40, src.Y+40)
+	tt.Move(450, 200)
+	tt.Key(0, KeyEscape)
+	tt.Release(450, 200)
+	tt.Frame()
+	if len(missed) != 0 {
+		t.Fatalf("given up with Escape: missed %v", missed)
+	}
+}
+
+// A source the frame builds no more, as one in a view that went away
+// while it was dragged, goes on: its copy follows the pointer, and it
+// drops where it is let go of.
+func TestDragSourceGone(t *testing.T) {
+	var dropped []string
+	shown := true
+	tt := coreNewTester(func(c *context) {
+		coreColumn(c).Gap(20).Padding(20).Children(func() {
+			if shown {
+				coreBox(c).Size(100, 40).Label("Source").Background(RGB(255, 0, 0)).Drag("hello")
+			} else {
+				coreBox(c).Size(100, 40).Label("Other")
+			}
+			target := coreBox(c).Size(200, 100).Label("Target")
+			if v, ok := coreDrop[string](target); ok {
+				dropped = append(dropped, v)
+			}
+		})
+	}, 400, 400)
+	src, _ := tt.Find("Source")
+	target, _ := tt.Find("Target")
+	tt.Press(src.X+10, src.Y+10)
+	tt.Move(src.X+30, src.Y+30)
+	shown = false
+	tt.Frame()
+	if _, ok := tt.Find("Source"); ok {
+		t.Fatal("the source is still built")
+	}
+	tt.Move(target.X+20, target.Y+20)
+	if c := tt.Image().RGBAAt(int(target.X+40), int(target.Y+20)); c.R < 150 || c.G > 100 {
+		t.Errorf("no copy of the source under the pointer: %v", c)
+	}
+	tt.Release(target.X+20, target.Y+20)
+	if !slices.Equal(dropped, []string{"hello"}) {
+		t.Fatalf("dropped %q", dropped)
+	}
+	// It is forgotten once let go of.
+	tt.Frame()
+	if c := tt.Image().RGBAAt(int(target.X+40), int(target.Y+20)); c.R > 150 && c.G < 100 {
+		t.Errorf("the copy stays after the drop: %v", c)
+	}
+}
+
+// An element taking the value built under a pointer that stands still, as
+// in a view that just showed, is the one the value is over, and takes it.
+func TestDragTargetBuiltUnderPointer(t *testing.T) {
+	var dropped []string
+	var over, shown bool
+	tt := coreNewTester(func(c *context) {
+		coreColumn(c).Gap(20).Padding(20).Children(func() {
+			coreBox(c).Size(100, 40).Label("Source").Drag("hello")
+			if shown {
+				target := coreBox(c).Size(200, 100).Label("Target")
+				if v, ok := coreDrop[string](target); ok {
+					dropped = append(dropped, v)
+				}
+				_, over = coreDragOver[string](target)
+			}
+		})
+	}, 400, 400)
+	src, _ := tt.Find("Source")
+	x, y := src.X+20, src.Y+src.H+60
+	tt.Press(src.X+10, src.Y+10)
+	tt.Move(src.X+30, src.Y+30)
+	tt.Move(x, y)
+	shown = true
+	tt.Frame()
+	tt.Frame()
+	if !over {
+		t.Fatal("the target built under the pointer does not see the value")
+	}
+	tt.Release(x, y)
+	if !slices.Equal(dropped, []string{"hello"}) {
+		t.Fatalf("dropped %q", dropped)
+	}
+}

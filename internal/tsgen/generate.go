@@ -72,12 +72,20 @@ var runtimeTypes = map[string]string{
 	"github.com/egoist/mygo.ThemePreferences": "ThemePreferences",
 }
 
-// runtimeSentinel holds the names of runtimeTypes in generator.taken, so
-// that types of the app with those names get others.
+// runtimeSentinel reserves imported and built-in type names in
+// generator.taken, so types of the app with those names get others.
 type runtimeSentinel struct{}
 
 // Generate renders the TypeScript client.
 func Generate(m Model) ([]byte, error) {
+	for _, s := range m.Services {
+		if !IsIdentifier(s.Name) || reserved[s.Name] {
+			return nil, fmt.Errorf("service %q is not a TypeScript binding name", s.Name)
+		}
+		if s.Name == "call" || len(m.Events) > 0 && (s.Name == "event" || s.Name == "events") {
+			return nil, fmt.Errorf("service %q conflicts with a generated TypeScript binding", s.Name)
+		}
+	}
 	g := &generator{
 		src:   newSources(),
 		names: map[reflect.Type]string{},
@@ -87,11 +95,14 @@ func Generate(m Model) ([]byte, error) {
 
 		imported: map[string]bool{},
 	}
+	for _, name := range []string{"Promise", "Record"} {
+		g.taken[name] = reflect.TypeFor[runtimeSentinel]()
+	}
 	for _, name := range runtimeTypes {
 		g.taken[name] = reflect.TypeFor[runtimeSentinel]()
 	}
 
-	// Learn package directories first so type docs can be found.
+	// Reserve imported names and learn package directories before declaring types.
 	type methodSrc struct {
 		file string
 		line int
@@ -100,6 +111,10 @@ func Generate(m Model) ([]byte, error) {
 	for si := range m.Services {
 		for mi := range m.Services[si].Methods {
 			meth := &m.Services[si].Methods[mi]
+			// A later method may need Channel after an app type was named.
+			if slices.Contains(meth.Channels, true) {
+				g.taken["Channel"] = reflect.TypeFor[runtimeSentinel]()
+			}
 			file, line := g.src.learnPC(meth.PC)
 			locs[meth] = methodSrc{file, line}
 		}
@@ -139,8 +154,9 @@ func Generate(m Model) ([]byte, error) {
 					doc = fd.Doc.Text()
 				}
 			}
-			var params, args []string
-			used := map[string]bool{}
+			var params, args, types []string
+			// Parameters must not shadow the runtime function called below.
+			used := map[string]bool{"call": true, "bind": true}
 			for pi, pt := range meth.Params {
 				name := ""
 				if pi < len(names) {
@@ -154,6 +170,7 @@ func Generate(m Model) ([]byte, error) {
 				if meth.Variadic && pi == len(meth.Params)-1 {
 					params = append(params, "..."+name+": "+arrayOf(g.ts(pt.Elem())))
 					args = append(args, "..."+name)
+					types = append(types, "..."+arrayOf(g.ts(pt.Elem())))
 					continue
 				}
 				typ := g.ts(pt)
@@ -163,18 +180,18 @@ func Generate(m Model) ([]byte, error) {
 				}
 				params = append(params, name+": "+typ)
 				args = append(args, name)
+				types = append(types, typ)
 			}
 			result := "void"
 			if meth.Result != nil {
 				result = g.ts(meth.Result)
 			}
 			writeDoc(&services, "  ", doc)
-			call := quote(s.Name + "." + meth.Name)
-			if len(args) > 0 {
-				call += ", " + strings.Join(args, ", ")
-			}
-			fmt.Fprintf(&services, "  %s(%s): Promise<%s> {\n    return call(%s);\n  },\n",
-				name, strings.Join(params, ", "), result, call)
+			// The arguments are built at the call, so that the options of
+			// the call can be given with them.
+			fmt.Fprintf(&services, "  %s: bind<[%s], %s>(%s, (%s) => [%s]),\n",
+				name, strings.Join(types, ", "), result, quote(s.Name+"."+meth.Name),
+				strings.Join(params, ", "), strings.Join(args, ", "))
 		}
 		services.WriteString("} as const;\n\n")
 	}
@@ -201,7 +218,7 @@ func Generate(m Model) ([]byte, error) {
 	// The runtime comes from the mygo-runtime package.
 	var imports []string
 	if services.Len() > 0 {
-		imports = append(imports, "call")
+		imports = append(imports, "bind")
 	}
 	if events.Len() > 0 {
 		imports = append(imports, "event")

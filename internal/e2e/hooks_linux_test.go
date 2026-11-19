@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64)
+//go:build linux && !android && (amd64 || arm64) && !android
 
 package e2e
 
@@ -94,6 +94,7 @@ func deactivateApp() bool                                        { return false 
 func material(*mygo.Window) (string, int, float64, bool, bool)   { return "", 0, 0, false, false }
 func materialState(*mygo.Window) (int, bool)                     { return 0, false }
 func roundedBacking(*mygo.Window) (bool, float64, float64, bool) { return false, 0, 0, false }
+func windowBacking(*mygo.Window) (bool, float64, bool)           { return false, 0, false }
 func appActive() (bool, bool)                                    { return false, false }
 
 // WebKitGTK docks the inspector inside the web view.
@@ -334,9 +335,15 @@ func observe(*mygo.Window) (func(), bool) { return nil, false }
 // composition the test makes up does not show.
 func pressKey(*mygo.Window, uint16, string) bool { return false }
 
+func pressKeyComposing(*mygo.Window, uint16, string, string, string) bool { return false }
+
 // X routes a drag to the window under the pointer, which
 // dropFiles, dropping on the content's, skips.
 func dragFiles(*mygo.Window, float64, float64, []string) (bool, bool) { return false, false }
+
+func dropFilesFrom(*mygo.Window, float64, float64, float64, float64, []string) (bool, bool, bool) {
+	return false, false, false
+}
 
 // pressTab presses Tab, with Shift when back, as the keyboard does.
 func pressTab(_ *mygo.Window, back bool) bool {

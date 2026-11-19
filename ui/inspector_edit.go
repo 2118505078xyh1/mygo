@@ -68,6 +68,7 @@ func (in *inspector) applyEditsTo(e *node) {
 		return
 	}
 	if edits := in.edits[e.id]; len(edits) > 0 {
+		journalKeepNode(e)
 		for i := range edits {
 			ed := &edits[i]
 			switch {
@@ -269,7 +270,7 @@ func styleKnown(name string) bool {
 		"aspect-ratio", "flex-grow", "flex-shrink", "flex-basis", "padding", "margin", "border", "border-width", "border-color", "border-style",
 		"border-radius", "filter", "background", "background-color", "box-shadow", "opacity", "visibility", "display",
 		"color", "font-family", "font-size", "font-weight", "font-style", "line-height", "letter-spacing", "text-align",
-		"text-decoration", "font-feature-settings", "selection-color", "line-clamp", "white-space", "z-index":
+		"text-decoration", "font-feature-settings", "selection-color", "caret-color", "line-clamp", "white-space", "z-index":
 		return true
 	}
 	return false
@@ -340,6 +341,7 @@ func setStyle(e *node, name, value string) bool {
 		v, ok := parseCSSLength(lower)
 		if ok {
 			e.inset[side] = v
+			e.insetSet = true
 			if side%2 == 1 {
 				e.unlog(side, logInset)
 			}
@@ -551,6 +553,13 @@ func setStyle(e *node, name, value string) bool {
 			e.ts.set |= setSelection
 		}
 		return ok
+	case "caret-color":
+		c, ok := parseCSSColor(value)
+		if ok {
+			e.ts.caret = c
+			e.ts.set |= setCaret
+		}
+		return ok
 	case "line-clamp":
 		if n, err := strconv.Atoi(lower); err == nil && n >= 0 {
 			e.maxLines = n
@@ -606,13 +615,17 @@ func unsetStyle(e *node, name string) {
 		e.self = alignAuto
 	case "top":
 		e.inset[0] = length{}
+		e.insetSet = e.insetAny()
 	case "right":
 		e.inset[1] = length{}
+		e.insetSet = e.insetAny()
 		e.unlog(1, logInset)
 	case "bottom":
 		e.inset[2] = length{}
+		e.insetSet = e.insetAny()
 	case "left":
 		e.inset[3] = length{}
+		e.insetSet = e.insetAny()
 		e.unlog(3, logInset)
 	case "width":
 		e.width = length{}
@@ -688,6 +701,8 @@ func unsetStyle(e *node, name string) {
 		e.ts.set &^= setFeatures
 	case "selection-color":
 		e.ts.set &^= setSelection
+	case "caret-color":
+		e.ts.set &^= setCaret
 	case "line-clamp":
 		e.maxLines = 0
 	case "z-index":
@@ -726,6 +741,8 @@ func textStyleBit(name string) uint32 {
 		return setFeatures
 	case "selection-color":
 		return setSelection
+	case "caret-color":
+		return setCaret
 	case "background-color":
 		return setBackground
 	}

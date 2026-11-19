@@ -72,10 +72,10 @@ type inspector struct {
 	// panel is the ID of the panel, width its width, and appW the width
 	// it leaves the content. tab is the panel's tab, side the tab of the
 	// sidebar below the tree, split the height of the tree.
-	panel       uint64
-	width, appW float32
-	tab, side   int
-	split       float32
+	panel             uint64
+	width, appW, appH float32
+	tab, side         int
+	split             float32
 	// nodes are the elements of the last frame, in the order of the tree,
 	// with the keys the frame gave them; sel describes the element chosen.
 	// sum hashes them, and shown is the sum the panel was built from.
@@ -179,12 +179,35 @@ func (in *inspector) contentWidth(w float32) float32 {
 	if in.width == 0 {
 		in.width = inspectorWidth
 	}
+	if inspectorBelow(w) {
+		in.appW = w
+		return w
+	}
 	pw := min(max(in.width, 260), w-160)
-	if w < 520 {
+	if w < inspectorNarrow {
 		pw = w / 2
 	}
 	in.appW = max(w-pw, 0)
 	return in.appW
+}
+
+// inspectorNarrow is the width of a window below which the panel takes half.
+const inspectorNarrow = 520
+
+// inspectorBelow says whether the panel docks along the window's bottom: on a
+// phone's narrow screen, where neither half of it side by side would be of use.
+func inspectorBelow(w float32) bool {
+	return w < inspectorNarrow && (runtime.GOOS == "ios" || runtime.GOOS == "android")
+}
+
+// contentHeight returns the height the window w×h leaves the content.
+func (in *inspector) contentHeight(w, h float32) float32 {
+	if !in.open || !inspectorBelow(w) {
+		in.appH = h
+		return h
+	}
+	in.appH = max(h*0.45, 0)
+	return in.appH
 }
 
 // lap notes how long the frame's phase took since the last lap (-1 starts
@@ -314,15 +337,20 @@ func (in *inspector) noteKey(id uint64, k any) {
 	}
 }
 
+// holds reports whether the element id is in the panel while it shows.
+func (in *inspector) holds(rt *engine, id uint64) bool {
+	return in.open && in.panel != 0 && rt.within(id, in.panel)
+}
+
 // pointer takes the pointer over the content while picking: moving
 // outlines the element under it, and a press chooses it. It reports
 // whether it took ev.
 func (in *inspector) pointer(rt *engine, ev platform.SurfaceEvent, x, y float32) bool {
 	switch {
-	case in.swallow && ev.Kind == platform.PointerUp:
+	case in.swallow && (ev.Kind == platform.PointerUp || ev.Kind == platform.PointerCancel):
 		in.swallow = false
 		return true
-	case !in.picking || x >= in.appW:
+	case !in.picking || x >= in.appW || y >= in.appH:
 		return false
 	}
 	switch ev.Kind {
@@ -344,7 +372,7 @@ func (in *inspector) pointer(rt *engine, ev platform.SurfaceEvent, x, y float32)
 		in.picking, in.hovered, in.swallow = false, 0, true
 		rt.requestFrame()
 		return true
-	case platform.PointerUp:
+	case platform.PointerUp, platform.PointerCancel:
 		return true
 	}
 	return false
@@ -609,10 +637,48 @@ func roleName(r Role) string {
 		return "MenuItemCheckbox"
 	case RoleMenuItemRadio:
 		return "MenuItemRadio"
+	case RoleRegion:
+		return "Region"
+	case RoleLog:
+		return "Log"
+	case RoleTimer:
+		return "Timer"
+	case RoleAlert:
+		return "Alert"
+	case RoleSeparator:
+		return "Separator"
+	case RoleRowHeader:
+		return "RowHeader"
+	case RoleSearch:
+		return "Search"
+	case RoleArticle:
+		return "Article"
 	case RoleHeading:
 		return "Heading"
 	case RoleNavigation:
 		return "Navigation"
+	case RoleGrid:
+		return "Grid"
+	case RoleTreeGrid:
+		return "TreeGrid"
+	case RoleListBox:
+		return "ListBox"
+	case RoleOption:
+		return "Option"
+	case RoleDeletion:
+		return "Deletion"
+	case RoleInsertion:
+		return "Insertion"
+	case RoleTabPanel:
+		return "TabPanel"
+	case RoleMain:
+		return "Main"
+	case RoleBanner:
+		return "Banner"
+	case RoleContentInfo:
+		return "ContentInfo"
+	case RoleComplementary:
+		return "Complementary"
 	}
 	return ""
 }
@@ -623,6 +689,26 @@ func accessibleRole(e *node) (string, bool) {
 	r, ok := e.accessRole()
 	if !ok {
 		return "none", false
+	}
+	switch e.role {
+	case RoleListBox:
+		return "listbox", true
+	case RoleOption:
+		return "option", true
+	case RoleDeletion:
+		return "deletion", true
+	case RoleInsertion:
+		return "insertion", true
+	case RoleTabPanel:
+		return "tabpanel", true
+	case RoleMain:
+		return "main", true
+	case RoleBanner:
+		return "banner", true
+	case RoleContentInfo:
+		return "contentinfo", true
+	case RoleComplementary:
+		return "complementary", true
 	}
 	switch role := Role(r) + RoleGroup; role {
 	case RoleGroup:

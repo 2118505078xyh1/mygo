@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64)
+//go:build linux && !android && (amd64 || arm64)
 
 package linux
 
@@ -67,6 +67,11 @@ func initSystemCallbacks() {
 	if d := gdkDisplayGetDefault(); d != 0 {
 		connect(d, "monitor-added", cbMonitorsChanged, 0)
 		connect(d, "monitor-removed", cbMonitorsChanged, 0)
+		// The pointing devices (Theme.Preferences).
+		if seat := gdkDisplayGetDefaultSeat(d); seat != 0 {
+			connect(seat, "device-added", cbThemeChanged, 0)
+			connect(seat, "device-removed", cbThemeChanged, 0)
+		}
 	}
 }
 
@@ -118,7 +123,7 @@ func clip() ptr {
 }
 
 func (clipboard) ReadText() string        { return takeStr(gtkClipboardWaitForText(clip())) }
-func (c clipboard) WriteText(text string) { _ = c.WriteData(transfer.TextData(text), nil) }
+func (c clipboard) WriteText(text string) { _ = c.WriteData(transfer.TextData(text), false, nil) }
 
 func (clipboard) ReadHTML() string {
 	sd := gtkClipboardWaitForContents(clip(), gdkAtomIntern(cs("text/html"), false))
@@ -135,7 +140,7 @@ func (clipboard) ReadHTML() string {
 }
 
 func (c clipboard) WriteHTML(markup string) {
-	_ = c.WriteData(transfer.New(transfer.NewItem(transfer.Bytes(transfer.HTML, []byte(markup)), transfer.Bytes(transfer.Text, []byte(markup)))), nil)
+	_ = c.WriteData(transfer.New(transfer.NewItem(transfer.Bytes(transfer.HTML, []byte(markup)), transfer.Bytes(transfer.Text, []byte(markup)))), false, nil)
 }
 
 func (clipboard) ReadImage() []byte {
@@ -153,7 +158,7 @@ func (c clipboard) WriteImage(png []byte) error {
 		return err
 	}
 	defer gObjectUnref(pix)
-	return c.WriteData(transfer.New(transfer.NewItem(transfer.Bytes(transfer.PNG, png))), nil)
+	return c.WriteData(transfer.New(transfer.NewItem(transfer.Bytes(transfer.PNG, png))), false, nil)
 }
 
 func (clipboard) Clear() { gtkClipboardClear(clip()) }
@@ -176,9 +181,16 @@ func (clipboard) AvailableFormats() []string {
 
 type shell struct{}
 
+// launch opens uri in its default application, with the display's launch
+// context, which gives it startup notification or the activation token that
+// lets it take the focus: GNOME shows an app that has none behind, and
+// tells in a notification that it is ready.
 func launch(uri string) error {
+	loadLaunch()
+	ctx := gdkDisplayGetAppLaunchContext(gdkDisplayGetDefault())
+	defer gObjectUnref(ctx)
 	var gerr ptr
-	if !gAppInfoLaunchDefaultForURI(cs(uri), 0, &gerr) {
+	if !gAppInfoLaunchDefaultForURI(cs(uri), ctx, &gerr) {
 		return gErr(gerr)
 	}
 	return nil
@@ -195,11 +207,32 @@ func (shell) OpenPath(path string) error    { return launch(fileURI(path)) }
 
 func (s shell) ShowItemInFolder(path string) {
 	uri := fileURI(path)
-	uris := gVariantNewArray(gVariantTypeNew(cs("s")), unsafe.Pointer(&[]ptr{gVariantNewString(cs(uri))}[0]), 1)
-	params := tuple(uris, gVariantNewString(cs("")))
+	str := gVariantTypeNew(cs("s"))
+	uris := gVariantNewArray(str, unsafe.Pointer(&[]ptr{gVariantNewString(cs(uri))}[0]), 1)
+	gVariantTypeFree(str) // the array has its own
+	ctx, id := folderStartup()
+	defer gObjectUnref(ctx)
+	params := tuple(uris, gVariantNewString(cs(id)))
 	if _, err := dbusCall("org.freedesktop.FileManager1", "/org/freedesktop/FileManager1", "org.freedesktop.FileManager1", "ShowItems", params, ""); err != nil {
+		if id != "" {
+			gAppLaunchContextLaunchFailed(ctx, cs(id))
+		}
 		_ = s.OpenPath(filepath.Dir(path))
 	}
+}
+
+// folderStartup returns a launch context of the display and the startup ID
+// it gives the application that opens folders, which the file manager takes
+// to show its window in front, as an X11 startup notification or a Wayland
+// activation token; "" where no application opens folders.
+func folderStartup() (ctx ptr, id string) {
+	loadLaunch()
+	ctx = gdkDisplayGetAppLaunchContext(gdkDisplayGetDefault())
+	if info := gAppInfoGetDefaultForType(cs("inode/directory"), false); info != 0 {
+		id = takeStr(gAppLaunchContextGetStartupID(ctx, info, 0))
+		gObjectUnref(info)
+	}
+	return ctx, id
 }
 
 func (shell) TrashItem(path string) error {
@@ -211,6 +244,10 @@ func (shell) TrashItem(path string) error {
 	}
 	return nil
 }
+
+func (shell) TrashItemResult(string) (string, error) { return "", platform.ErrUnsupported }
+
+func (shell) PreviewItem(string) error { return platform.ErrUnsupported }
 
 func (shell) Beep() { gdkDisplayBeep(gdkDisplayGetDefault()) }
 
@@ -365,10 +402,12 @@ func doubleClick() platform.DoubleClick {
 	return platform.DoubleClick{Time: time.Duration(ms) * time.Millisecond, DX: float64(distance), DY: float64(distance)}
 }
 
-// Preferences reads GTK's animations setting, and the accent, contrast
-// and text size the desktop portal gives, as GNOME's and KDE's do.
+// Preferences reads GTK's animations setting, the accent, contrast and
+// text size the desktop portal gives, as GNOME's and KDE's do, and the
+// seat's pointing devices.
 func (t theme) Preferences() platform.Preferences {
 	var p platform.Preferences
+	p.Pointer, p.AnyPointer, p.NoHover, p.NoAnyHover = pointingDevices()
 	settings := gtkSettingsGetDefault()
 	animations := int32(1)
 	gObjectGetPtr(settings, cs("gtk-enable-animations"), unsafe.Pointer(&animations), 0)
@@ -408,6 +447,57 @@ func (t theme) Preferences() platform.Preferences {
 		gVariantUnref(v)
 	}
 	return p
+}
+
+// GdkInputSource's sources of pointing devices, and GdkSeatCapabilities'
+// of pointing.
+const (
+	sourceMouse       = 0
+	sourcePen         = 1
+	sourceEraser      = 2
+	sourceCursor      = 3
+	sourceTouchscreen = 5
+	sourceTouchpad    = 6
+	sourceTrackpoint  = 7
+	seatAllPointing   = 7 // GDK_SEAT_CAPABILITY_ALL_POINTING
+)
+
+// pointingDevices returns how accurate the primary pointing device is and
+// the most accurate of all, and whether they cannot hover, from the
+// seat's devices as Chromium tells them: mice, touchpads, trackpoints and
+// pens point finely and hover, touch screens coarsely, without hovering;
+// the primary device is the finest. A seat that lists none, as a display
+// GDK does not know, has a mouse's.
+func pointingDevices() (primary, finest platform.PointerAccuracy, noHover, noneHover bool) {
+	d := gdkDisplayGetDefault()
+	if d == 0 {
+		return
+	}
+	seat := gdkDisplayGetDefaultSeat(d)
+	if seat == 0 {
+		return
+	}
+	list := gdkSeatGetSlaves(seat, seatAllPointing)
+	if list == 0 {
+		return
+	}
+	defer gListFree(list)
+	fine, touch := false, false
+	for node := list; node != 0; node = field[ptr](node, 8) {
+		switch gdkDeviceGetSource(field[ptr](node, 0)) {
+		case sourceMouse, sourcePen, sourceEraser, sourceCursor, sourceTouchpad, sourceTrackpoint:
+			fine = true
+		case sourceTouchscreen:
+			touch = true
+		}
+	}
+	switch {
+	case fine:
+		return platform.PointerFine, platform.PointerFine, false, false
+	case touch:
+		return platform.PointerCoarse, platform.PointerCoarse, true, true
+	}
+	return platform.PointerNone, platform.PointerNone, true, true
 }
 
 func (t theme) IsDark() bool {
@@ -535,7 +625,9 @@ func dbusCall(name, path, iface, method string, params ptr, replyType string) (p
 	}
 	var rt ptr
 	if replyType != "" {
+		// The call only reads it.
 		rt = gVariantTypeNew(cs(replyType))
+		defer gVariantTypeFree(rt)
 	}
 	var gerr ptr
 	res := gDBusConnectionCallSync(conn, cs(name), cs(path), cs(iface), cs(method), params, rt, 0, 3000, 0, &gerr)
@@ -633,10 +725,7 @@ func (b *Backend) showNotification(n *platform.Notification) error {
 			hints = append(hints, hint)
 		}
 	}
-	hintArray := gVariantNewArray(gVariantTypeNew(cs("{sv}")), nil, 0)
-	if len(hints) > 0 {
-		hintArray = gVariantNewArray(0, unsafe.Pointer(&hints[0]), uintptr(len(hints)))
-	}
+	hintArray := vardict(hints...)
 	body := n.Body
 	if n.Subtitle != "" {
 		body = n.Subtitle + "\n" + body

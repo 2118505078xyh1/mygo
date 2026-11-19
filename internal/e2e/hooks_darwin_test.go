@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin && !ios
 
 package e2e
 
@@ -152,6 +152,13 @@ func roundedBacking(w *mygo.Window) (opaque bool, alpha, red float64, supported 
 	return opaque, alpha, red, true
 }
 
+// windowBacking reports whether the window is opaque, and the alpha of its
+// background color.
+func windowBacking(w *mygo.Window) (opaque bool, alpha float64, supported bool) {
+	mygo.RunOnMain(func() { opaque, alpha = darwin.TestWindowBacking(w.NativeHandle()) })
+	return opaque, alpha, true
+}
+
 func dockDevTools(w *mygo.Window) (ok bool) {
 	mygo.RunOnMain(func() { ok = darwin.TestDockInspector(w.NativeHandle()) })
 	return ok
@@ -246,14 +253,33 @@ func pressKey(w *mygo.Window, code uint16, chars string) (ok bool) {
 	return ok
 }
 
-// AppKit routes a drag to the view under the pointer, which
-// dropFiles, dropping on the content's, skips.
-func dragFiles(*mygo.Window, float64, float64, []string) (bool, bool) { return false, false }
+// dragFiles drags files from another application to (x, y) and drops them
+// there, as AppKit does: the surface is the view under the pointer, in the
+// content or over a page, whose drag it hands to the page's web view.
+func dragFiles(w *mygo.Window, x, y float64, paths []string) (dropped, ok bool) {
+	mygo.RunOnMain(func() { _, dropped = darwin.TestDropFiles(w.NativeHandle(), x, y, paths) })
+	return dropped, true
+}
+
+// dropFilesFrom drags files over (overX, overY) and lets go of them at
+// (x, y).
+func dropFilesFrom(w *mygo.Window, overX, overY, x, y float64, paths []string) (over, dropped, ok bool) {
+	mygo.RunOnMain(func() { over, dropped = darwin.TestDropFilesFrom(w.NativeHandle(), overX, overY, x, y, paths) })
+	return over, dropped, true
+}
 
 // pressTab presses Tab in a window of native UI, with Shift when back, as
 // the keyboard does: in the content or in the page of a web view.
 func pressTab(w *mygo.Window, back bool) (ok bool) {
 	mygo.RunOnMain(func() { ok = darwin.TestKeyShift(w.NativeHandle(), 48, "\t", back) })
+	return ok
+}
+
+// pressKeyComposing presses a key in a window of native UI with the test
+// standing in for the input method: it commits commit, unless empty, then
+// passes the key on as command (doCommandBySelector:), unless empty.
+func pressKeyComposing(w *mygo.Window, code uint16, chars, commit, command string) (ok bool) {
+	mygo.RunOnMain(func() { ok = darwin.TestKeyComposing(w.NativeHandle(), code, chars, commit, command) })
 	return ok
 }
 
@@ -462,3 +488,7 @@ func nativeGlassTint(w *mygo.Window) (red, green, blue, alpha float64) {
 }
 
 func activateApp() { mygo.RunOnMain(darwin.TestActivate) }
+
+// Only X servers keep a keyboard's state for the tests after a test: see
+// left_behind_linux_test.go.
+func keyboardState() (state string, restore func()) { return "", func() {} }

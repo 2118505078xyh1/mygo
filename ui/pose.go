@@ -64,6 +64,8 @@ func (e *node) AnimatePose(p Pose, a Animation) *node {
 		a.Spring.physics()
 	}
 	e.pose, e.poseAnim, e.poseSet = p, a, true
+	linkGroups() // its Fade fades a group
+
 	scene.FoldTranslations() // renderers draw poses that only move as untransformed content
 	return e
 }
@@ -196,11 +198,15 @@ func (e *node) insideReposed() bool {
 func (e *node) updateWorld() {
 	w := e.transformAt(e.x, e.y)
 	if e.parent != nil && e != e.c.overlay {
-		w = e.parent.world.Mul(w)
+		base := e.parent.world
+		if contentStretch != nil && e.parent.scrolls() {
+			base = contentStretch(base, e.parent)
+		}
+		w = base.Mul(w)
 	}
 	e.world = w
 	if e.st != nil {
-		e.st.world = w
+		e.st.world, e.st.reposed = w, true
 	}
 	for c := e.first; c != nil; c = c.next {
 		c.updateWorld()
