@@ -122,8 +122,10 @@ func TestReusedTextSystemStartsAnew(t *testing.T) {
 	tt.SetScale(2)
 	tt.SetLocale("ja")
 	s := tt.h.text
-	if s.MaskAtlas.W*s.MaskAtlas.H <= 256*256 {
-		t.Fatal("the fixture did not grow the atlas")
+	// Glyphs go to the mask atlas, or with ClearType (Windows) to the
+	// color one.
+	if s.MaskAtlas.W*s.MaskAtlas.H <= 256*256 && s.ColorAtlas.W*s.ColorAtlas.H <= 1 {
+		t.Fatal("the fixture did not grow an atlas")
 	}
 	tt.end()
 	if l := s.Language(); l != "" {
